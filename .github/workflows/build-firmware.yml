@@ -9,8 +9,8 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - uses: actions/cache@v4
@@ -19,7 +19,17 @@ jobs:
           key: pio-${{ hashFiles('firmware/platformio.ini') }}
       - run: pip install platformio
       - name: Compile
-        run: pio run -d firmware
+        shell: bash
+        run: |
+          set +e
+          pio run -d firmware 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ $code -ne 0 ]; then
+            # show compiler errors as annotations on the run page
+            grep -E "error:|Error |\*\*\*" build.log | head -25 | while IFS= read -r l; do echo "::error::$l"; done
+            tail -8 build.log | while IFS= read -r l; do echo "::error::$l"; done
+          fi
+          exit $code
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceAI-firmware
