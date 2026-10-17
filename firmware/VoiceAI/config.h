@@ -22,7 +22,7 @@
   "Answer clearly and briefly in plain sentences. No markdown, no emojis, no lists."
 #define DEFAULT_MAX_WORDS    40    // soft limit put into the system prompt
 #define DEFAULT_NUM_PREDICT  160   // hard limit on generated tokens
-#define DEFAULT_NUM_CTX      2048  // context window sent to Ollama
+#define DEFAULT_NUM_CTX      0     // 0 = use the model's default (fastest, no engine restart)
 #define OLLAMA_TIMEOUT_MS    65000 // first answer can be slow while the model loads (max 65535)
 
 // ---- Voice --------------------------------------------------------------------

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded terracotta square with a dark dot and sound waves -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#D97757"
+        android:pathData="M42,30h24a12,12 0,0 1,12 12v24a12,12 0,0 1,-12 12h-24a12,12 0,0 1,-12 -12v-24a12,12 0,0 1,12 -12z" />
+    <path android:fillColor="#1A1915"
+        android:pathData="M54,46a8,8 0,1 1,0 16a8,8 0,1 1,0 -16z" />
+    <path android:strokeColor="#F3C4AE" android:strokeWidth="3" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M66,44a14,14 0,0 1,0 20M38,44a14,14 0,0 0,0 20" />
+</vector>

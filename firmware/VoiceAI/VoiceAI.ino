@@ -54,7 +54,7 @@ void loadSettings() {
   cfg.systemPrompt = prefs.getString("sys", DEFAULT_SYSTEM_PROMPT);
   cfg.maxWords     = prefs.getUShort("words", DEFAULT_MAX_WORDS);
   cfg.numPredict   = prefs.getUShort("npred", DEFAULT_NUM_PREDICT);
-  cfg.numCtx       = prefs.getUShort("nctx", DEFAULT_NUM_CTX);
+  cfg.numCtx       = prefs.getUShort("nctx2", DEFAULT_NUM_CTX);
   cfg.voiceMode    = prefs.getUChar("voice", DEFAULT_VOICE_MODE);
   cfg.ttsPort      = prefs.getUShort("ttsport", DEFAULT_TTS_PORT);
   cfg.volume       = prefs.getFloat("vol", DEFAULT_VOLUME);
@@ -69,7 +69,7 @@ void saveSettings() {
   prefs.putString("sys", cfg.systemPrompt);
   prefs.putUShort("words", cfg.maxWords);
   prefs.putUShort("npred", cfg.numPredict);
-  prefs.putUShort("nctx", cfg.numCtx);
+  prefs.putUShort("nctx2", cfg.numCtx);
   prefs.putUChar("voice", cfg.voiceMode);
   prefs.putUShort("ttsport", cfg.ttsPort);
   prefs.putFloat("vol", cfg.volume);
@@ -241,7 +241,9 @@ bool runChat(const String &body, String &reply, Usage &u, String &err) {
   req["keep_alive"] = "30m";
   JsonObject opt = req["options"].to<JsonObject>();
   opt["num_predict"] = cfg.numPredict;
-  opt["num_ctx"] = cfg.numCtx;
+  // Only send a context size if one is set. Changing it makes Ollama restart
+  // its engine (slow), so by default we use the model's own setting like v1.
+  if (cfg.numCtx > 0) opt["num_ctx"] = cfg.numCtx;
   opt["temperature"] = in["temperature"] | 0.7;
 
   JsonArray msgs = req["messages"].to<JsonArray>();
@@ -447,7 +449,7 @@ void setupRoutes() {
     if (in["system_prompt"].is<const char *>()) cfg.systemPrompt = in["system_prompt"].as<String>();
     if (in["max_words"].is<int>())    cfg.maxWords = constrain(in["max_words"].as<int>(), 5, 300);
     if (in["num_predict"].is<int>())  cfg.numPredict = constrain(in["num_predict"].as<int>(), 16, 1024);
-    if (in["num_ctx"].is<int>())      cfg.numCtx = constrain(in["num_ctx"].as<int>(), 512, 8192);
+    if (in["num_ctx"].is<int>())      cfg.numCtx = (in["num_ctx"].as<int>() <= 0 ? 0 : constrain(in["num_ctx"].as<int>(), 512, 32768));
     if (in["voice_mode"].is<int>())   cfg.voiceMode = in["voice_mode"].as<int>() ? 1 : 0;
     if (in["tts_port"].is<int>())     cfg.ttsPort = in["tts_port"];
     if (in["volume"].is<float>())     cfg.volume = constrain(in["volume"].as<float>(), 0.0f, 4.0f);

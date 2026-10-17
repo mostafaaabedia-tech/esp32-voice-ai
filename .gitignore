@@ -1,7 +1,10 @@
-app/node_modules/
-app/android/
 firmware/.pio/
 firmware/.vscode/
 __pycache__/
 *.pyc
 .DS_Store
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
