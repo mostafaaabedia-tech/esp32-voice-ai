@@ -12,7 +12,7 @@
 
 // ---- PC running Ollama --------------------------------------------------------
 // The PC must run Ollama with OLLAMA_HOST=0.0.0.0 so the ESP32 can reach it.
-#define DEFAULT_OLLAMA_HOST  "192.168.1.189" // your PC's LAN IP
+#define DEFAULT_OLLAMA_HOST  "192.168.80.189" // your PC's LAN IP
 #define DEFAULT_OLLAMA_PORT  11434
 #define DEFAULT_MODEL        "qwen2.5:1.5b"
 
