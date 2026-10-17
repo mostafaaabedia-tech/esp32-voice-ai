@@ -8,3 +8,5 @@ struct Usage {
   uint32_t totalMs = 0, loadMs = 0, promptMs = 0, genMs = 0;
   float tokensPerSec = 0;
 };
+
+enum JobState { ST_IDLE, ST_THINKING, ST_SPEAKING, ST_ERROR };

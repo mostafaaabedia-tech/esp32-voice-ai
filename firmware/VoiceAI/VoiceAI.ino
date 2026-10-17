@@ -83,7 +83,6 @@ SemaphoreHandle_t stateLock;
 #define LOCK()   xSemaphoreTake(stateLock, portMAX_DELAY)
 #define UNLOCK() xSemaphoreGive(stateLock)
 
-enum JobState { ST_IDLE, ST_THINKING, ST_SPEAKING, ST_ERROR };
 const char *stateName(JobState s) {
   switch (s) {
     case ST_THINKING: return "thinking";
