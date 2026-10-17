@@ -1,10 +1,12 @@
 package com.voiceai.esp32.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 
 // Colours taken from the school logo: deep navy + teal
@@ -60,8 +62,10 @@ val Warn = Color(0xFFE7B25B)
 
 @Composable
 fun VoiceAITheme(content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors,
-        content = content,
-    )
+    val colors = if (isSystemInDarkTheme()) DarkColors else LightColors
+    MaterialTheme(colorScheme = colors) {
+        // Without this, every Text that has no colour of its own is drawn BLACK
+        // (invisible on the dark navy background). Make the default text light.
+        CompositionLocalProvider(LocalContentColor provides colors.onBackground, content = content)
+    }
 }
