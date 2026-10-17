@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#1a1915">
+  <title>VoiceAI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ Drawer (chat history) ============ -->
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="brand"><span class="logo"></span>VoiceAI</div>
+      <button class="icon-btn" data-action="close-drawer" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <button class="new-chat-btn" data-action="new-chat">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New chat
+    </button>
+    <div class="drawer-label">Recent</div>
+    <nav id="chat-list" class="chat-list"></nav>
+    <div class="drawer-foot">
+      <button class="drawer-link" data-action="open-usage">
+        <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg> Usage
+      </button>
+      <button class="drawer-link" data-action="open-settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg> Settings
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ Main chat ============ -->
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" data-action="open-drawer" aria-label="Chats">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h16"/></svg>
+      </button>
+      <button class="model-pill" data-action="open-settings">
+        <span id="conn-dot" class="dot"></span>
+        <span id="model-name">qwen2.5:1.5b</span>
+        <svg viewBox="0 0 24 24" class="chev"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="top-right">
+        <button class="icon-btn" data-action="open-usage" aria-label="Usage">
+          <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+        </button>
+        <button class="icon-btn" data-action="new-chat" aria-label="New chat">
+          <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section id="messages" class="messages">
+      <div id="empty" class="empty">
+        <div class="empty-mark"><span class="logo big"></span></div>
+        <h1 id="greeting">What can I help with?</h1>
+        <p class="empty-sub">Ask by typing or tap the mic. Answers play on your ESP32 speaker.</p>
+        <div class="chips">
+          <button class="chip" data-prompt="Tell me a fun fact about space.">Fun space fact</button>
+          <button class="chip" data-prompt="Give me a quick English word of the day with its meaning.">Word of the day</button>
+          <button class="chip" data-prompt="Explain how a greenhouse keeps plants warm.">How greenhouses work</button>
+          <button class="chip" data-prompt="Tell me a short joke.">Tell a joke</button>
+        </div>
+      </div>
+    </section>
+
+    <footer class="composer-wrap">
+      <div class="route-row">
+        <button id="route-btn" class="route-chip" data-action="cycle-route"></button>
+        <span id="device-state" class="device-state"></span>
+      </div>
+      <div class="composer">
+        <textarea id="input" rows="1" placeholder="Message VoiceAI…" enterkeyhint="send"></textarea>
+        <button id="mic-btn" class="round-btn mic" data-action="mic" aria-label="Speak">
+          <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
+        <button id="send-btn" class="round-btn send" data-action="send" aria-label="Send" disabled>
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+      </div>
+      <div class="ctx-line"><div id="ctx-bar" class="ctx-bar"><i></i></div><span id="ctx-text">0 tokens in this chat</span></div>
+    </footer>
+  </main>
+
+  <!-- ============ Voice overlay ============ -->
+  <div id="voice" class="voice" hidden>
+    <div class="voice-orb"><span></span><span></span><span></span></div>
+    <p id="voice-text" class="voice-text">Listening…</p>
+    <p class="voice-hint">Speak now. Tap the button when you're done.</p>
+    <div class="voice-actions">
+      <button class="pill-btn ghost" data-action="voice-cancel">Cancel</button>
+      <button class="pill-btn" data-action="voice-done">Send</button>
+    </div>
+  </div>
+
+  <!-- ============ Usage sheet ============ -->
+  <div id="usage" class="sheet" hidden>
+    <header class="sheet-head">
+      <button class="icon-btn" data-action="close-sheet" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <h2>Usage</h2>
+      <button class="text-btn" data-action="reset-usage">Reset</button>
+    </header>
+    <div class="sheet-body" id="usage-body"></div>
+  </div>
+
+  <!-- ============ Settings sheet ============ -->
+  <div id="settings" class="sheet" hidden>
+    <header class="sheet-head">
+      <button class="icon-btn" data-action="close-sheet" aria-label="Back">
+        <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <h2>Settings</h2>
+      <span></span>
+    </header>
+    <div class="sheet-body">
+      <div class="group-title">Connection</div>
+      <div class="card">
+        <label class="field">ESP32 address
+          <div class="row"><input id="set-host" inputmode="url" placeholder="192.168.1.50"><button class="pill-btn small" data-action="test-conn">Connect</button></div>
+        </label>
+        <div id="device-info" class="device-info">Not connected yet.</div>
+        <label class="switch-row"><span>Demo mode<small>Try the app without the ESP32</small></span><input type="checkbox" id="set-demo"><i></i></label>
+      </div>
+
+      <div class="group-title">AI model <small>saved on the ESP32</small></div>
+      <div class="card">
+        <label class="field">Model<select id="set-model"></select></label>
+        <label class="field">Ollama PC address<input id="set-ollama" placeholder="192.168.1.189"></label>
+        <label class="field">Instructions (system prompt)<textarea id="set-system" rows="3"></textarea></label>
+        <div class="two">
+          <label class="field">Max words<input id="set-words" type="number" min="5" max="300"></label>
+          <label class="field">Max tokens<input id="set-predict" type="number" min="16" max="1024"></label>
+        </div>
+        <div class="two">
+          <label class="field">Context size<select id="set-ctx"><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select></label>
+          <label class="field">Memory (messages)<input id="set-history" type="number" min="1" max="20"></label>
+        </div>
+        <button class="pill-btn wide" data-action="save-device">Save to ESP32</button>
+      </div>
+
+      <div class="group-title">Voice</div>
+      <div class="card">
+        <label class="field">Play answers on
+          <div class="seg" id="set-route">
+            <button data-v="esp">Speaker</button><button data-v="phone">Phone</button><button data-v="both">Both</button><button data-v="off">Silent</button>
+          </div>
+        </label>
+        <label class="field">ESP32 voice
+          <div class="seg" id="set-voice">
+            <button data-v="0">Robot (offline)</button><button data-v="1">PC voice</button>
+          </div>
+        </label>
+        <label class="field">Speaker volume <span id="vol-val" class="muted"></span><input id="set-volume" type="range" min="0" max="4" step="0.1"></label>
+        <label class="field">Speech language
+          <select id="set-lang">
+            <option value="en-US">English (US)</option><option value="en-GB">English (UK)</option>
+            <option value="fa-IR">Persian / Dari</option><option value="ps-AF">Pashto</option>
+            <option value="tr-TR">Turkish</option><option value="az-AZ">Azerbaijani</option>
+            <option value="ru-RU">Russian</option><option value="ar-SA">Arabic</option>
+          </select>
+        </label>
+        <label class="switch-row"><span>Send right after speaking<small>Otherwise you can edit the text first</small></span><input type="checkbox" id="set-autosend"><i></i></label>
+        <button class="pill-btn wide ghost" data-action="test-voice">Test speaker</button>
+      </div>
+      <p class="foot-note">VoiceAI · your questions go to your own PC. Nothing leaves your network.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

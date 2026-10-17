@@ -1,0 +1,15 @@
+{
+  "appId": "com.voiceai.esp32",
+  "appName": "VoiceAI",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}
