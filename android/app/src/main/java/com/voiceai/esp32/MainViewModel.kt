@@ -2,6 +2,7 @@ package com.voiceai.esp32
 
 import android.app.Application
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -12,6 +13,7 @@ import com.voiceai.esp32.data.Chat
 import com.voiceai.esp32.data.DeviceInfo
 import com.voiceai.esp32.data.Message
 import com.voiceai.esp32.data.Mode
+import com.voiceai.esp32.data.Persona
 import com.voiceai.esp32.data.Store
 import com.voiceai.esp32.data.Usage
 import com.voiceai.esp32.data.UsageRecord
@@ -51,6 +53,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var pcOnline by mutableStateOf(false); private set
     var pcModels by mutableStateOf(listOf<String>()); private set
     var toast by mutableStateOf<String?>(null)
+    /** Text to put in the input box (edit question, spoken text when auto-send is off). */
+    var draft by mutableStateOf<String?>(null)
+    /** Increases when hands-free mode wants the mic to start again. */
+    var listenRequest by mutableIntStateOf(0); private set
 
     private var askJob: Job? = null
 
@@ -155,6 +161,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         saveChats()
     }
 
+    fun renameChat(id: String, title: String) {
+        val i = chats.indexOfFirst { it.id == id }
+        if (i < 0 || title.isBlank()) return
+        chats[i] = chats[i].copy(title = title.trim().take(60))
+        saveChats()
+    }
+
+    /** Edit a question: put it back in the box and remove it (and everything after it). */
+    fun editFrom(index: Int) {
+        val c = current ?: return
+        if (busy) { toast = "Wait for the answer to finish"; return }
+        val m = c.messages.getOrNull(index) ?: return
+        putChat(c.copy(messages = c.messages.take(index)))
+        draft = m.content
+    }
+
+    fun exportText(c: Chat): String = buildString {
+        append("VoiceAI chat: ${c.title}\n\n")
+        c.messages.forEach { m ->
+            append(if (m.role == "user") "You: " else "AI: ")
+            append(m.content.trim()).append("\n\n")
+        }
+        append("Made with VoiceAI by Mostafa Mesbah Aabedi & Sebghatullah Haidari")
+    }
+
+    fun systemPrompt(s: AppSettings): String {
+        val words = if (s.persona == Persona.CODER) s.maxWords * 3 else s.maxWords
+        val base = when (s.persona) {
+            Persona.ASSISTANT -> s.systemPrompt
+            Persona.CODER -> s.persona.prompt
+            else -> s.systemPrompt + " " + s.persona.prompt
+        }
+        return "$base Keep every answer under $words words."
+    }
+
     private fun putChat(c: Chat) {
         val i = chats.indexOfFirst { it.id == c.id }
         if (i >= 0) chats.removeAt(i)
@@ -224,10 +265,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (s.pcHost.isBlank()) throw IllegalStateException("Add your PC address in Settings")
                         model = s.model
                         val msgs = JSONArray()
-                        msgs.put(JSONObject().put("role", "system")
-                            .put("content", s.systemPrompt + " Keep every answer under ${s.maxWords} words."))
+                        msgs.put(JSONObject().put("role", "system").put("content", systemPrompt(s)))
                         history.forEach { msgs.put(JSONObject().put("role", it.role).put("content", it.content.take(2000))) }
-                        result = Api.ollamaChat(s.pcHost, model, msgs, s.maxTokens) { piece ->
+                        result = Api.ollamaChat(s.pcHost, model, msgs, s.maxTokens, s.temperature) { piece ->
                             withContext(Dispatchers.Main) { liveText += piece }
                         }
                     }
@@ -235,8 +275,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (s.espHost.isBlank()) throw IllegalStateException("Add the ESP32 address in Settings")
                         model = device?.model?.ifBlank { null } ?: s.model
                         val msgs = JSONArray()
+                        if (s.persona != Persona.ASSISTANT) msgs.put(JSONObject().put("role", "system").put("content", s.persona.prompt))
                         history.forEach { msgs.put(JSONObject().put("role", it.role).put("content", it.content.take(1500))) }
-                        result = Api.espAsk(s.espHost, msgs, speak = s.route.onSpeaker)
+                        result = Api.espAsk(s.espHost, msgs, speak = s.route.onSpeaker, temperature = s.temperature)
                     }
                 }
                 val (reply, u) = result
@@ -252,6 +293,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     try { Api.espSpeak(s.espHost, plain(reply)) } catch (e: Exception) { toast = e.message }
                 }
                 if (s.route.onSpeaker) refreshStatus()
+                if (s.handsFree) launch { waitUntilQuiet(s); listenRequest++ }
             } catch (e: CancellationException) {
                 val partial = liveText.trim()
                 if (partial.isNotEmpty()) {
@@ -264,6 +306,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 liveText = ""
             }
         }
+    }
+
+    /** Hands-free: wait until the phone and the speaker stop talking. */
+    private suspend fun waitUntilQuiet(s: AppSettings) {
+        delay(600)
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < 90_000) {
+            val phoneBusy = s.route.onPhone && phoneVoice.speaking
+            val espBusy = s.route.onSpeaker && s.espHost.isNotBlank() &&
+                runCatching { Api.espInfo(s.espHost).state == "speaking" }.getOrDefault(false)
+            if (!phoneBusy && !espBusy) break
+            delay(700)
+        }
+        delay(300)
     }
 
     // ------------------------------------------------------------------ audio

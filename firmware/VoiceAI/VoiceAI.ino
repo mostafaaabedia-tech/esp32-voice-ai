@@ -255,7 +255,7 @@ bool runChat(const String &body, String &reply, Usage &u, String &err) {
   if (history.isNull() || history.size() == 0) { err = "No messages"; return false; }
   for (JsonObject m : history) {
     const char *role = m["role"] | "user";
-    if (strcmp(role, "user") && strcmp(role, "assistant")) continue;
+    if (strcmp(role, "user") && strcmp(role, "assistant") && strcmp(role, "system")) continue;  // app may add a persona as "system"
     JsonObject o = msgs.add<JsonObject>();
     o["role"] = role;
     o["content"] = m["content"] | "";

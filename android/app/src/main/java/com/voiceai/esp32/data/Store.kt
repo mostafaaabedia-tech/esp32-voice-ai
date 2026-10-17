@@ -26,6 +26,10 @@ class Store(context: Context) {
             systemPrompt = prefs.getString("systemPrompt", d.systemPrompt) ?: d.systemPrompt,
             maxWords = prefs.getInt("maxWords", d.maxWords),
             maxTokens = prefs.getInt("maxTokens", d.maxTokens),
+            persona = runCatching { Persona.valueOf(prefs.getString("persona", d.persona.name)!!) }.getOrDefault(d.persona),
+            temperature = prefs.getFloat("temperature", d.temperature),
+            textScale = prefs.getFloat("textScale", d.textScale),
+            handsFree = prefs.getBoolean("handsFree", d.handsFree),
         )
     }
 
@@ -42,6 +46,10 @@ class Store(context: Context) {
             .putString("systemPrompt", s.systemPrompt)
             .putInt("maxWords", s.maxWords)
             .putInt("maxTokens", s.maxTokens)
+            .putString("persona", s.persona.name)
+            .putFloat("temperature", s.temperature)
+            .putFloat("textScale", s.textScale)
+            .putBoolean("handsFree", s.handsFree)
             .apply()
     }
 

@@ -103,8 +103,8 @@ object Api {
     }
 
     /** Ask through the ESP32 (the original way). Polls until the answer is ready. */
-    suspend fun espAsk(host: String, messages: JSONArray, speak: Boolean): Pair<String, Usage> {
-        val body = JSONObject().put("messages", messages).put("speak", speak)
+    suspend fun espAsk(host: String, messages: JSONArray, speak: Boolean, temperature: Float = 0.7f): Pair<String, Usage> {
+        val body = JSONObject().put("messages", messages).put("speak", speak).put("temperature", temperature.toDouble())
         val (code, text) = try {
             request("POST", base(host) + "/api/ask", body)
         } catch (e: IOException) {
@@ -159,14 +159,14 @@ object Api {
      * [onToken] gets each new piece of text as it arrives.
      */
     suspend fun ollamaChat(
-        host: String, model: String, messages: JSONArray, maxTokens: Int, onToken: suspend (String) -> Unit,
+        host: String, model: String, messages: JSONArray, maxTokens: Int, temperature: Float, onToken: suspend (String) -> Unit,
     ): Pair<String, Usage> = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("model", model)
             .put("stream", true)
             .put("keep_alive", "30m")
             .put("messages", messages)
-            .put("options", JSONObject().put("num_predict", maxTokens))   // no num_ctx: avoids engine restarts
+            .put("options", JSONObject().put("num_predict", maxTokens).put("temperature", temperature.toDouble()))   // no num_ctx: avoids engine restarts
 
         val start = System.currentTimeMillis()
         val c = try {

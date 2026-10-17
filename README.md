@@ -46,6 +46,13 @@ Ask a question on your phone (type it or say it), the ESP32 sends it to **Qwen 2
 - Per answer: **input · output tokens · tokens/second · time** (tap for model-load time)
 - Context-window bar under the text box
 - **Usage page**: total / today tokens, input vs output split, tokens-per-answer chart, speed chart, context meter, ESP32 counters since boot, top chats, per-model totals
+- **Copy buttons on code blocks and quotes**, long-press to select any text, share answers
+- **Personas**: Assistant, Teacher, Coder, Translator, Storyteller, Coach (one tap above the text box)
+- **Quick follow-ups** under the last answer: Simpler, Example, More detail, Summarize, In Dari
+- **Hands-free conversation**: the mic turns on again after each answer is spoken
+- Tap your own message to **copy, edit & resend, or ask again**
+- Chat list with **search, rename, share/export, delete**
+- **Creativity** slider (temperature) and **text size** setting
 - **Settings**: mode, PC + ESP32 addresses with live status, model picker (your installed Ollama models), system prompt, max words / tokens, chat memory, speaker volume, robot/PC voice, speech language
 
 ## 1. Wiring (ESP32 → PAM8406)

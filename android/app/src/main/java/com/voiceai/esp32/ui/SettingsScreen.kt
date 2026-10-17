@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voiceai.esp32.MainViewModel
 import com.voiceai.esp32.data.Mode
+import com.voiceai.esp32.data.Persona
 import com.voiceai.esp32.data.Route
 import kotlinx.coroutines.launch
 
@@ -136,6 +137,23 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                     Box(Modifier.weight(1f)) { Field("Max tokens", tokens, keyboard = KeyboardType.Number) { tokens = it } }
                 }
                 Field("Memory (last messages sent)", memory, keyboard = KeyboardType.Number) { memory = it }
+                Label("Personality")
+                Segmented(Persona.entries.take(3), s.persona.takeIf { it in Persona.entries.take(3) } ?: Persona.entries[0], { "${it.emoji} ${it.label}" }) {
+                    vm.updateSettings(vm.settings.copy(persona = it))
+                }
+                Spacer(Modifier.height(6.dp))
+                Segmented(Persona.entries.drop(3), s.persona.takeIf { it in Persona.entries.drop(3) } ?: Persona.ASSISTANT, { "${it.emoji} ${it.label}" }) {
+                    vm.updateSettings(vm.settings.copy(persona = it))
+                }
+                Spacer(Modifier.height(14.dp))
+                val t = s.temperature
+                Label("Creativity  " + when {
+                    t < 0.35f -> "· focused"
+                    t < 0.9f -> "· balanced"
+                    else -> "· creative"
+                } + "  (%.1f)".format(t))
+                Slider(value = t, onValueChange = { vm.updateSettings(vm.settings.copy(temperature = (it * 10).toInt() / 10f)) }, valueRange = 0f..1.5f)
+                Spacer(Modifier.height(6.dp))
                 Button(onClick = { saveLocal(); vm.pushToDevice() }, modifier = Modifier.fillMaxWidth()) { Text("Save") }
             }
 
@@ -159,6 +177,14 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
+                        Text("Hands-free conversation", fontSize = 15.sp)
+                        Text("Mic turns on again after each answer is spoken", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+                    }
+                    Switch(checked = s.handsFree, onCheckedChange = { vm.updateSettings(vm.settings.copy(handsFree = it)) })
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
                         Text("Send right after speaking", fontSize = 15.sp)
                         Text("Otherwise you can edit the text first", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
                     }
@@ -174,11 +200,19 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                 ) { Text("Test speaker") }
             }
 
+            SectionTitle("Display")
+            AppCard {
+                Label("Text size")
+                Segmented(listOf(0.9f, 1f, 1.15f, 1.3f), s.textScale, {
+                    when (it) { 0.9f -> "Small"; 1f -> "Normal"; 1.15f -> "Large"; else -> "Huge" }
+                }) { vm.updateSettings(vm.settings.copy(textScale = it)) }
+            }
+
             SectionTitle("About")
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 3.2 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 4.0 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )

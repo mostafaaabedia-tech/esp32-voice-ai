@@ -18,6 +18,16 @@ enum class Route(val label: String) {
     val onPhone get() = this == PHONE || this == BOTH
 }
 
+/** Quick personalities: one tap changes how the AI answers. */
+enum class Persona(val label: String, val emoji: String, val prompt: String) {
+    ASSISTANT("Assistant", "🤖", ""),
+    TEACHER("Teacher", "🎓", "Act as a friendly teacher. Explain step by step with a simple example, like to a high-school student."),
+    CODER("Coder", "💻", "Act as an expert programmer. Give working code in markdown code blocks with the language name, then a short explanation."),
+    TRANSLATOR("Translator", "🌐", "Act as a translator. Translate the user's text between English and Dari/Persian (whichever it is not), then give a short pronunciation tip."),
+    STORY("Storyteller", "📖", "Act as a creative storyteller. Tell short, vivid, family-friendly stories."),
+    COACH("Coach", "💪", "Act as a motivating study and life coach. Be encouraging and give 2-3 practical tips."),
+}
+
 data class AppSettings(
     val espHost: String = "",
     val pcHost: String = "192.168.80.189",
@@ -30,6 +40,10 @@ data class AppSettings(
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val maxWords: Int = 40,
     val maxTokens: Int = 160,
+    val persona: Persona = Persona.ASSISTANT,
+    val temperature: Float = 0.7f,
+    val textScale: Float = 1f,
+    val handsFree: Boolean = false,
 )
 
 data class Usage(

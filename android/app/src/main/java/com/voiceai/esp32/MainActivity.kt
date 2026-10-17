@@ -12,6 +12,22 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import com.voiceai.esp32.data.Chat
+import com.voiceai.esp32.ui.BrandGradient
+import com.voiceai.esp32.ui.shareText
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -100,7 +116,6 @@ private fun App(vm: MainViewModel) {
     var listening by remember { mutableStateOf(false) }
     var heard by remember { mutableStateOf("") }
     var level by remember { mutableFloatStateOf(0f) }
-    var draft by remember { mutableStateOf<String?>(null) }
 
     fun finish(send: Boolean, text: String) {
         if (!listening) return
@@ -108,7 +123,7 @@ private fun App(vm: MainViewModel) {
         voice.cancel()
         val t = text.trim()
         if (send && t.isNotEmpty()) {
-            if (vm.settings.autoSend) vm.send(t) else draft = t
+            if (vm.settings.autoSend) vm.send(t) else vm.draft = t
         }
     }
 
@@ -132,6 +147,13 @@ private fun App(vm: MainViewModel) {
         else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    // hands-free: listen again after the answer has been spoken
+    LaunchedEffect(vm.listenRequest) {
+        if (vm.listenRequest > 0 && !listening && vm.settings.handsFree &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        ) startListening()
+    }
+
     // ------------------------------------------------------------------ back
     BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
     BackHandler(enabled = !drawer.isOpen && vm.screen != Screen.CHAT) { vm.screen = Screen.CHAT }
@@ -145,7 +167,7 @@ private fun App(vm: MainViewModel) {
         },
     ) {
         when (vm.screen) {
-            Screen.CHAT -> ChatScreen(vm, onMenu = { scope.launch { drawer.open() } }, onMic = onMic, draft = draft, onDraftUsed = { draft = null })
+            Screen.CHAT -> ChatScreen(vm, onMenu = { scope.launch { drawer.open() } }, onMic = onMic)
             Screen.USAGE -> UsageScreen(vm) { vm.screen = Screen.CHAT }
             Screen.SETTINGS -> SettingsScreen(vm) { vm.screen = Screen.CHAT }
         }
@@ -162,29 +184,62 @@ private fun App(vm: MainViewModel) {
 
 @Composable
 private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
+    val context = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var renaming by remember { mutableStateOf<Chat?>(null) }
+    var deleting by remember { mutableStateOf<Chat?>(null) }
+    val shown = vm.chats.filter {
+        query.isBlank() || it.title.contains(query, true) || it.messages.any { m -> m.content.contains(query, true) }
+    }
     Column(Modifier.fillMaxSize().padding(12.dp)) {
         BrandHeader(compact = true)
         Row(
             Modifier
-                .padding(top = 6.dp)
+                .padding(top = 10.dp)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer)
+                .background(Brush.linearGradient(BrandGradient))
                 .clickable { vm.newChat(); close() }
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Filled.Add, null, tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Filled.Add, null, tint = Color.White)
             Spacer(Modifier.width(10.dp))
-            Text("New chat", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            Text("New chat", color = Color.White, fontWeight = FontWeight.SemiBold)
+        }
+        // search
+        Row(
+            Modifier
+                .padding(top = 10.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Search, null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            BasicTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.weight(1f),
+                decorationBox = { inner ->
+                    if (query.isEmpty()) Text("Search chats", color = MaterialTheme.colorScheme.outline, fontSize = 14.sp)
+                    inner()
+                },
+            )
         }
         Text(
-            "RECENT", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.padding(start = 8.dp, top = 18.dp, bottom = 6.dp),
+            if (query.isBlank()) "RECENT" else "RESULTS", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 6.dp),
         )
         LazyColumn(Modifier.weight(1f)) {
-            if (vm.chats.isEmpty()) item { Text("No chats yet", color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(10.dp)) }
-            items(vm.chats, key = { it.id }) { c ->
+            if (shown.isEmpty()) item {
+                Text(if (query.isBlank()) "No chats yet" else "Nothing found", color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(10.dp))
+            }
+            items(shown, key = { it.id }) { c ->
+                var menu by remember { mutableStateOf(false) }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -196,13 +251,24 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp)
-                        if (c.tokens > 0) Text("${fmt(c.tokens)} tokens", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+                        Text(
+                            "${c.messages.size} messages" + (if (c.tokens > 0) " · ${fmt(c.tokens)} tokens" else ""),
+                            fontSize = 11.sp, color = MaterialTheme.colorScheme.outline,
+                        )
                     }
-                    Box(
-                        Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).clickable { vm.deleteChat(c.id) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.Outlined.Delete, "Delete", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp))
+                    Box {
+                        Box(
+                            Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).clickable { menu = true },
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Filled.MoreVert, "More", tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(18.dp)) }
+                        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            DropdownMenuItem(text = { Text("Rename") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                                onClick = { renaming = c; menu = false })
+                            DropdownMenuItem(text = { Text("Share / export") }, leadingIcon = { Icon(Icons.Outlined.Share, null) },
+                                onClick = { shareText(context, vm.exportText(c)); menu = false })
+                            DropdownMenuItem(text = { Text("Delete") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                                onClick = { deleting = c; menu = false })
+                        }
                     }
                 }
             }
@@ -210,6 +276,26 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DrawerLink(Icons.Outlined.BarChart, "Usage") { vm.screen = Screen.USAGE; close() }
         DrawerLink(Icons.Outlined.Settings, "Settings") { vm.screen = Screen.SETTINGS; close() }
+    }
+
+    renaming?.let { c ->
+        var name by remember(c.id) { mutableStateOf(c.title) }
+        AlertDialog(
+            onDismissRequest = { renaming = null },
+            title = { Text("Rename chat") },
+            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
+            confirmButton = { TextButton(onClick = { vm.renameChat(c.id, name); renaming = null }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
+        )
+    }
+    deleting?.let { c ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete chat?") },
+            text = { Text("\"${c.title}\" will be removed from this phone.") },
+            confirmButton = { TextButton(onClick = { vm.deleteChat(c.id); deleting = null }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
+        )
     }
 }
 

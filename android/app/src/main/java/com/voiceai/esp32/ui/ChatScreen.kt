@@ -1,5 +1,21 @@
 package com.voiceai.esp32.ui
 
+import android.content.Context
+import android.content.Intent
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import com.voiceai.esp32.data.Persona
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -91,13 +107,14 @@ import kotlinx.coroutines.delay
 import java.util.Calendar
 
 @Composable
-fun ChatScreen(vm: MainViewModel, onMenu: () -> Unit, onMic: () -> Unit, draft: String?, onDraftUsed: () -> Unit) {
+fun ChatScreen(vm: MainViewModel, onMenu: () -> Unit, onMic: () -> Unit) {
     val msgs = vm.messages
     val list = rememberLazyListState()
     var input by rememberSaveable { mutableStateOf("") }
-    LaunchedEffect(draft) {
-        if (draft != null) { input = draft; onDraftUsed() }
+    LaunchedEffect(vm.draft) {
+        vm.draft?.let { input = it; vm.draft = null }
     }
+    val scope = rememberCoroutineScope()
 
     // keep the newest text in view while streaming
     val itemCount = msgs.size + (if (vm.busy || vm.error != null) 1 else 0)
@@ -119,11 +136,25 @@ fun ChatScreen(vm: MainViewModel, onMenu: () -> Unit, onMic: () -> Unit, draft: 
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     itemsIndexed(msgs, key = { i, m -> "${m.ts}-$i" }) { i, m ->
-                        if (m.role == "user") UserBubble(m.content)
+                        if (m.role == "user") UserBubble(vm, i, m.content)
                         else AiMessage(vm, m, isLast = i == msgs.lastIndex && !vm.busy)
                     }
                     if (vm.busy) item(key = "live") { LiveAnswer(vm) }
                     else if (vm.error != null) item(key = "error") { ErrorItem(vm.error!!) { vm.retry() } }
+                }
+                // jump to the newest message
+                if (list.canScrollForward) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 10.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                            .clickable { scope.launch { list.animateScrollToItem(itemCount - 1, scrollOffset = 100_000) } },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Filled.KeyboardArrowDown, "Newest", tint = MaterialTheme.colorScheme.onSurface) }
                 }
             }
         }
@@ -287,25 +318,49 @@ private fun EmptyState(vm: MainViewModel, onPick: (String) -> Unit, onMic: () ->
 }
 
 @Composable
-private fun UserBubble(text: String) {
+private fun UserBubble(vm: MainViewModel, index: Int, text: String) {
+    val clip = LocalClipboardManager.current
+    var menu by remember { mutableStateOf(false) }
+    val scale = vm.settings.textScale
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-        Text(
-            text, fontSize = 16.sp, lineHeight = 22.sp, color = Color.White,
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF1C5C86), Color(0xFF1D8C9A))))
-                .padding(horizontal = 15.dp, vertical = 10.dp),
-        )
+        Box {
+            Text(
+                text, fontSize = 16.sp * scale, lineHeight = 22.sp * scale, color = Color.White,
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF1C5C86), Color(0xFF1D8C9A))))
+                    .clickable { menu = true }
+                    .padding(horizontal = 15.dp, vertical = 10.dp),
+            )
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Copy") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) },
+                    onClick = { clip.setText(AnnotatedString(text)); vm.toast = "Copied"; menu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Edit & resend") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                    onClick = { vm.editFrom(index); menu = false },
+                )
+                DropdownMenuItem(
+                    text = { Text("Ask again") }, leadingIcon = { Icon(Icons.Outlined.Refresh, null) },
+                    onClick = { vm.editFrom(index); vm.draft = null; vm.send(text); menu = false },
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun AiHeader(name: String) {
+private fun AiHeader(name: String, ts: Long? = null) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Logo(20.dp)
         Spacer(Modifier.width(8.dp))
         Text(name, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (ts != null) Text(
+            "  ·  " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts)),
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+        )
     }
     Spacer(Modifier.height(6.dp))
 }
@@ -313,12 +368,20 @@ private fun AiHeader(name: String) {
 @Composable
 private fun AiMessage(vm: MainViewModel, m: Message, isLast: Boolean) {
     val clip = LocalClipboardManager.current
+    val context = LocalContext.current
     var details by remember { mutableStateOf(false) }
+    val copy: (String) -> Unit = { clip.setText(AnnotatedString(it)); vm.toast = "Copied" }
     Column(Modifier.fillMaxWidth()) {
-        AiHeader(m.model ?: "AI")
-        MarkdownText(m.content)
-        Row(Modifier.padding(top = 4.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            SmallAction(Icons.Outlined.ContentCopy, "Copy") { clip.setText(AnnotatedString(m.content)); vm.toast = "Copied" }
+        AiHeader(m.model ?: "AI", m.ts)
+        SelectionContainer {
+            MarkdownText(m.content, scale = vm.settings.textScale, onCopy = copy)
+        }
+        Row(
+            Modifier.padding(top = 4.dp).fillMaxWidth().horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SmallAction(Icons.Outlined.ContentCopy, "Copy") { copy(m.content) }
+            SmallAction(Icons.Outlined.Share, "Share") { shareText(context, m.content) }
             SmallAction(Icons.Outlined.Speaker, "Play on speaker") { vm.speakOnEsp(m.content) }
             SmallAction(Icons.Outlined.PhoneAndroid, "Read on phone") { vm.speakOnPhone(m.content) }
             if (isLast) SmallAction(Icons.Outlined.Refresh, "Regenerate") { vm.regenerate() }
@@ -352,7 +415,44 @@ private fun AiMessage(vm: MainViewModel, m: Message, isLast: Boolean) {
                     .padding(10.dp),
             )
         }
+        if (isLast) FollowUps { vm.send(it) }
     }
+}
+
+private val FOLLOW_UPS = listOf(
+    "🧒 Simpler" to "Explain that again in simpler words.",
+    "💡 Example" to "Give me a real example of that.",
+    "🔍 More detail" to "Tell me more detail about that.",
+    "📝 Summarize" to "Summarize that in one sentence.",
+    "🌐 In Dari" to "Translate your last answer to Dari (Persian).",
+)
+
+@Composable
+private fun FollowUps(onPick: (String) -> Unit) {
+    Row(
+        Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FOLLOW_UPS.forEach { (label, prompt) ->
+            Text(
+                label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
+                    .clickable { onPick(prompt) }
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            )
+        }
+    }
+}
+
+fun shareText(context: Context, text: String) {
+    val i = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(i, "Share"))
 }
 
 @Composable
@@ -383,7 +483,7 @@ private fun LiveAnswer(vm: MainViewModel) {
     Column(Modifier.fillMaxWidth()) {
         AiHeader(vm.settings.model)
         if (vm.liveText.isNotEmpty()) {
-            MarkdownText(vm.liveText + " ▍")
+            MarkdownText(vm.liveText + " ▍", scale = vm.settings.textScale)
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ThinkingDots()
@@ -464,6 +564,33 @@ private fun Composer(vm: MainViewModel, text: String, onText: (String) -> Unit, 
                 Text(
                     "Stop", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.stopAudio() }.padding(6.dp),
+                )
+            }
+        }
+
+        // personas: one tap changes how the AI answers
+        Row(
+            Modifier.fillMaxWidth().padding(bottom = 8.dp).horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Persona.entries.forEach { p ->
+                val on = p == s.persona
+                Text(
+                    "${p.emoji} ${p.label}", fontSize = 13.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (on) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (on) Brush.linearGradient(BrandGradient)
+                            else Brush.linearGradient(listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface))
+                        )
+                        .border(1.dp, if (on) Color.Transparent else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
+                        .clickable {
+                            vm.updateSettings(s.copy(persona = p))
+                            vm.toast = if (p == Persona.ASSISTANT) "Normal assistant" else "${p.label} mode"
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
                 )
             }
         }

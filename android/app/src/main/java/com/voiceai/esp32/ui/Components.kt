@@ -1,6 +1,23 @@
 package com.voiceai.esp32.ui
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontStyle
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -137,41 +154,152 @@ fun inlineMarkdown(text: String, codeBg: Color): AnnotatedString = buildAnnotate
     append(text.substring(last))
 }
 
-/** Renders paragraphs, bullet / numbered lists, code blocks, **bold** and `code`. */
-@Composable
-fun MarkdownText(text: String, color: Color = MaterialTheme.colorScheme.onBackground) {
-    val codeBg = MaterialTheme.colorScheme.surfaceVariant
-    val body = MaterialTheme.typography.bodyLarge.copy(color = color, lineHeight = 24.sp)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        val parts = text.split("```")
-        parts.forEachIndexed { i, part ->
-            if (i % 2 == 1) {
-                Text(
-                    part.substringAfter('\n', part).trimEnd(),
-                    fontFamily = FontFamily.Monospace, fontSize = 13.sp, color = color,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(codeBg)
-                        .padding(12.dp),
-                )
-            } else {
-                part.trim('\n').split('\n').filter { it.isNotBlank() }.forEach { line ->
-                    val bullet = Regex("""^\s*[-*•]\s+(.*)""").find(line)
-                    val number = Regex("""^\s*(\d+)[.)]\s+(.*)""").find(line)
-                    when {
-                        bullet != null -> Row {
-                            Text("•", style = body, modifier = Modifier.width(18.dp))
-                            Text(inlineMarkdown(bullet.groupValues[1], codeBg), style = body)
-                        }
-                        number != null -> Row {
-                            Text(number.groupValues[1] + ".", style = body, modifier = Modifier.width(24.dp))
-                            Text(inlineMarkdown(number.groupValues[2], codeBg), style = body)
-                        }
-                        else -> Text(inlineMarkdown(line.trim(), codeBg), style = body)
-                    }
+private sealed class Block {
+    data class Code(val lang: String, val code: String) : Block()
+    data class Quote(val text: String) : Block()
+    data class Heading(val text: String) : Block()
+    data class Bullet(val text: String) : Block()
+    data class Numbered(val n: String, val text: String) : Block()
+    data class Para(val text: String) : Block()
+}
+
+private fun parseBlocks(src: String): List<Block> {
+    val out = mutableListOf<Block>()
+    val lines = src.replace("\r", "").split('\n')
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val t = line.trim()
+        when {
+            t.startsWith("```") -> {
+                val lang = t.removePrefix("```").trim()
+                val code = StringBuilder()
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("```")) {
+                    if (code.isNotEmpty()) code.append('\n')
+                    code.append(lines[i]); i++
                 }
+                out += Block.Code(lang, code.toString())   // unfinished block while streaming is fine
             }
+            t.startsWith(">") -> {
+                val q = StringBuilder()
+                while (i < lines.size && lines[i].trim().startsWith(">")) {
+                    if (q.isNotEmpty()) q.append('\n')
+                    q.append(lines[i].trim().removePrefix(">").trim()); i++
+                }
+                out += Block.Quote(q.toString()); continue
+            }
+            t.startsWith("#") -> out += Block.Heading(t.trimStart('#').trim())
+            Regex("""^[-*•]\s+.*""").matches(t) -> out += Block.Bullet(t.drop(1).trim())
+            Regex("""^\d+[.)]\s+.*""").matches(t) -> {
+                val m = Regex("""^(\d+)[.)]\s+(.*)""").find(t)!!
+                out += Block.Numbered(m.groupValues[1], m.groupValues[2])
+            }
+            t.isNotEmpty() -> out += Block.Para(t)
+        }
+        i++
+    }
+    return out
+}
+
+/**
+ * Renders the AI's markdown: paragraphs, headings, lists, quotes and code blocks.
+ * Code blocks and quotes get their own Copy button.
+ */
+@Composable
+fun MarkdownText(
+    text: String,
+    color: Color = MaterialTheme.colorScheme.onBackground,
+    scale: Float = 1f,
+    onCopy: ((String) -> Unit)? = null,
+) {
+    val codeBg = MaterialTheme.colorScheme.surfaceVariant
+    val body = MaterialTheme.typography.bodyLarge.copy(color = color, fontSize = 16.sp * scale, lineHeight = 24.sp * scale)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        parseBlocks(text).forEach { b ->
+            when (b) {
+                is Block.Code -> CodeBlock(b.lang, b.code, scale, onCopy)
+                is Block.Quote -> QuoteBlock(b.text, body, codeBg, onCopy)
+                is Block.Heading -> Text(
+                    inlineMarkdown(b.text, codeBg), style = body.copy(fontWeight = FontWeight.Bold, fontSize = 18.sp * scale),
+                )
+                is Block.Bullet -> Row {
+                    Text("•", style = body.copy(color = MaterialTheme.colorScheme.primary), modifier = Modifier.width(18.dp))
+                    Text(inlineMarkdown(b.text, codeBg), style = body)
+                }
+                is Block.Numbered -> Row {
+                    Text(b.n + ".", style = body.copy(color = MaterialTheme.colorScheme.primary), modifier = Modifier.width(26.dp))
+                    Text(inlineMarkdown(b.text, codeBg), style = body)
+                }
+                is Block.Para -> Text(inlineMarkdown(b.text, codeBg), style = body)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodeBlock(lang: String, code: String, scale: Float, onCopy: ((String) -> Unit)?) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF0A1420))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp)),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().background(Color(0xFF13233A)).padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(lang.ifBlank { "code" }, color = Color(0xFF9DB1C5), fontSize = 12.sp, modifier = Modifier.weight(1f))
+            if (onCopy != null) CopyChip { onCopy(code) }
+        }
+        Text(
+            code,
+            fontFamily = FontFamily.Monospace, fontSize = 13.sp * scale, lineHeight = 19.sp * scale,
+            color = Color(0xFFD6E4F0),
+            softWrap = false,
+            modifier = Modifier.horizontalScroll(rememberScrollState()).padding(12.dp),
+        )
+    }
+}
+
+@Composable
+private fun QuoteBlock(text: String, body: TextStyle, codeBg: Color, onCopy: ((String) -> Unit)?) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer)
+            .height(IntrinsicSize.Min),
+    ) {
+        Box(Modifier.width(4.dp).fillMaxHeight().background(MaterialTheme.colorScheme.primary))
+        Text(
+            inlineMarkdown(text, codeBg), style = body.copy(fontStyle = FontStyle.Italic),
+            modifier = Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 10.dp),
+        )
+        if (onCopy != null) Box(Modifier.padding(top = 4.dp, end = 4.dp)) { CopyChip(iconOnly = true) { onCopy(text) } }
+    }
+}
+
+@Composable
+fun CopyChip(iconOnly: Boolean = false, onClick: () -> Unit) {
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable { onClick(); copied = true }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (copied) Icons.Filled.Check else Icons.Outlined.ContentCopy, "Copy",
+            tint = if (copied) MaterialTheme.colorScheme.tertiary else Color(0xFF9DB1C5),
+            modifier = Modifier.size(15.dp),
+        )
+        if (!iconOnly) {
+            Spacer(Modifier.width(5.dp))
+            Text(if (copied) "Copied" else "Copy", fontSize = 12.sp, color = if (copied) MaterialTheme.colorScheme.tertiary else Color(0xFF9DB1C5))
         }
     }
 }

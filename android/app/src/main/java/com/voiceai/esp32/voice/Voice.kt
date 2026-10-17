@@ -95,5 +95,7 @@ class PhoneVoice(context: Context) {
         if (ready) tts.stop()
     }
 
+    val speaking: Boolean get() = ready && tts.isSpeaking
+
     fun shutdown() = tts.shutdown()
 }
