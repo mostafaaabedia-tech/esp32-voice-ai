@@ -7,47 +7,54 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
+// Colours taken from the school logo: deep navy + teal
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFD97757),
-    onPrimary = Color.White,
-    primaryContainer = Color(0x24D97757),
-    onPrimaryContainer = Color(0xFFF0A483),
-    secondary = Color(0xFF8FA8D8),        // input tokens
-    tertiary = Color(0xFF7CC47F),         // online / good
-    background = Color(0xFF1A1915),
-    onBackground = Color(0xFFECE9E1),
-    surface = Color(0xFF23221E),
-    onSurface = Color(0xFFECE9E1),
-    surfaceVariant = Color(0xFF2D2C27),
-    onSurfaceVariant = Color(0xFF9B978C),
-    surfaceContainer = Color(0xFF23221E),
-    surfaceContainerHigh = Color(0xFF2D2C27),
-    surfaceContainerLow = Color(0xFF1F1E1A),
-    outline = Color(0xFF6D6A62),
-    outlineVariant = Color(0xFF3A3832),
-    error = Color(0xFFE5675B),
+    primary = Color(0xFF2EC4C9),
+    onPrimary = Color(0xFF00262B),
+    primaryContainer = Color(0x332EC4C9),
+    onPrimaryContainer = Color(0xFF8FE9EC),
+    secondary = Color(0xFF7FA8FF),        // input tokens
+    tertiary = Color(0xFF6FD08C),         // online / good
+    background = Color(0xFF0B1826),
+    onBackground = Color(0xFFE6EEF5),
+    surface = Color(0xFF122437),
+    onSurface = Color(0xFFE6EEF5),
+    surfaceVariant = Color(0xFF1A3150),
+    onSurfaceVariant = Color(0xFF9DB1C5),
+    surfaceContainer = Color(0xFF122437),
+    surfaceContainerHigh = Color(0xFF1A3150),
+    surfaceContainerLow = Color(0xFF0F1F30),
+    outline = Color(0xFF61788F),
+    outlineVariant = Color(0xFF223B57),
+    error = Color(0xFFFF7A6E),
 )
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFFC4623F),
+    primary = Color(0xFF14808C),
     onPrimary = Color.White,
-    primaryContainer = Color(0x1AC4623F),
-    onPrimaryContainer = Color(0xFF9A4527),
-    secondary = Color(0xFF5B7CC0),
-    tertiary = Color(0xFF3E9A47),
-    background = Color(0xFFF8F6F1),
-    onBackground = Color(0xFF23211C),
+    primaryContainer = Color(0x1A14808C),
+    onPrimaryContainer = Color(0xFF0B5560),
+    secondary = Color(0xFF3F6FD8),
+    tertiary = Color(0xFF2E9A50),
+    background = Color(0xFFF3F7FA),
+    onBackground = Color(0xFF0F2236),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF23211C),
-    surfaceVariant = Color(0xFFF0EDE5),
-    onSurfaceVariant = Color(0xFF6F6B62),
+    onSurface = Color(0xFF0F2236),
+    surfaceVariant = Color(0xFFE5EEF5),
+    onSurfaceVariant = Color(0xFF52687D),
     surfaceContainer = Color(0xFFFFFFFF),
-    surfaceContainerHigh = Color(0xFFF0EDE5),
-    surfaceContainerLow = Color(0xFFFBFAF7),
-    outline = Color(0xFFA19D93),
-    outlineVariant = Color(0xFFE2DED4),
-    error = Color(0xFFC4473B),
+    surfaceContainerHigh = Color(0xFFE5EEF5),
+    surfaceContainerLow = Color(0xFFF8FBFD),
+    outline = Color(0xFF8BA0B3),
+    outlineVariant = Color(0xFFD5E1EB),
+    error = Color(0xFFD1453B),
 )
+
+/** Logo gradient: teal -> ocean blue -> navy */
+val Teal = Color(0xFF2EC4C9)
+val Ocean = Color(0xFF3B82F6)
+val Navy = Color(0xFF15406A)
+val BrandGradient = listOf(Teal, Ocean)
 
 val Warn = Color(0xFFE7B25B)
 

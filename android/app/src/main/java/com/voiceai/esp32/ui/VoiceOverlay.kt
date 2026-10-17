@@ -57,7 +57,7 @@ fun VoiceOverlay(text: String, level: Float, onCancel: () -> Unit, onDone: () ->
                 Box(Modifier.size(140.dp).scale(1.25f * breathe + loud * 0.25f).alpha(0.3f).clip(CircleShape).background(accent))
                 Box(
                     Modifier.size(140.dp).scale(breathe * (1f + loud * 0.15f)).clip(CircleShape)
-                        .background(Brush.radialGradient(listOf(Color(0xFFF0A483), accent))),
+                        .background(Brush.radialGradient(listOf(Color(0xFF9EEBEE), accent, Ocean))),
                 )
             }
             Spacer(Modifier.height(28.dp))

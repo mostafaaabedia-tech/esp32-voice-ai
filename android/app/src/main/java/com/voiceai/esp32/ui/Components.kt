@@ -1,5 +1,6 @@
 package com.voiceai.esp32.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
+import com.voiceai.esp32.R
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -39,7 +45,7 @@ fun Logo(size: Dp = 22.dp) {
         Modifier
             .size(size)
             .clip(RoundedCornerShape(size * 0.3f))
-            .background(Brush.linearGradient(listOf(Color(0xFFE9A27F), MaterialTheme.colorScheme.primary))),
+            .background(Brush.linearGradient(BrandGradient)),
         contentAlignment = Alignment.Center,
     ) {
         Box(Modifier.size(size * 0.36f).clip(CircleShape).background(MaterialTheme.colorScheme.background))
@@ -172,3 +178,59 @@ fun MarkdownText(text: String, color: Color = MaterialTheme.colorScheme.onBackgr
 
 fun fmt(n: Number): String = "%,d".format(n.toLong())
 fun fmtSec(ms: Long): String = if (ms < 10_000) "%.1fs".format(ms / 1000.0) else "${ms / 1000}s"
+
+// ------------------------------------------------------------------ brand --
+const val CREDITS = "Made by Mostafa Mesbah Aabedi & Sebghatullah Haidari"
+const val SCHOOL = "Afghan-Turk Maarif Schools · Herat Boys HS"
+
+@Composable
+fun SchoolLogo(size: Dp) {
+    Image(
+        painter = painterResource(R.drawable.school_logo),
+        contentDescription = "Afghan-Turk Maarif Schools Herat Boys HS",
+        modifier = Modifier.size(size),
+    )
+}
+
+/** Logo + app name + credits, shown at the top of the app. */
+@Composable
+fun BrandHeader(modifier: Modifier = Modifier, compact: Boolean = false) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(
+                Brush.linearGradient(
+                    listOf(Navy, Color(0xFF1C5C86), Color(0xFF1D8C9A)),
+                )
+            )
+            .padding(horizontal = 14.dp, vertical = if (compact) 10.dp else 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.clip(CircleShape).background(Color.White).padding(2.dp)) {
+            SchoolLogo(if (compact) 40.dp else 54.dp)
+        }
+        Column(Modifier.padding(start = 12.dp)) {
+            Text("VoiceAI", color = Color.White, fontWeight = FontWeight.Bold, fontSize = if (compact) 17.sp else 20.sp)
+            Text(CREDITS, color = Color.White.copy(alpha = 0.92f), fontSize = 12.sp, lineHeight = 16.sp)
+            if (!compact) Text(SCHOOL, color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp)
+        }
+    }
+}
+
+/** Text painted with the teal -> blue logo gradient. */
+@OptIn(ExperimentalTextApi::class)
+@Composable
+fun GradientText(text: String, fontSize: androidx.compose.ui.unit.TextUnit, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        modifier = modifier,
+        textAlign = TextAlign.Center,
+        style = TextStyle(
+            brush = Brush.linearGradient(listOf(Teal, Ocean, Color(0xFF8B5CF6))),
+            fontSize = fontSize,
+            fontWeight = FontWeight.Bold,
+            lineHeight = fontSize * 1.25f,
+        ),
+    )
+}

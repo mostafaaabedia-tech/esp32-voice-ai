@@ -59,7 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.voiceai.esp32.ui.ChatScreen
-import com.voiceai.esp32.ui.Logo
+import com.voiceai.esp32.ui.BrandHeader
 import com.voiceai.esp32.ui.SettingsScreen
 import com.voiceai.esp32.ui.UsageScreen
 import com.voiceai.esp32.ui.VoiceAITheme
@@ -163,11 +163,7 @@ private fun App(vm: MainViewModel) {
 @Composable
 private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(12.dp)) {
-        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Logo(24.dp)
-            Spacer(Modifier.width(10.dp))
-            Text("VoiceAI", fontWeight = FontWeight.Bold, fontSize = 19.sp)
-        }
+        BrandHeader(compact = true)
         Row(
             Modifier
                 .padding(top = 6.dp)

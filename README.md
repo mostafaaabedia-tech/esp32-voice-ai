@@ -1,3 +1,10 @@
+<p align="center">
+  <img src="docs/logo.png" width="140" alt="Afghan-Turk Maarif Schools Herat Boys HS">
+</p>
+
+<p align="center"><b>Made by Mostafa Mesbah Aabedi &amp; Sebghatullah Haidari</b><br>
+Afghan-Turk Maarif Schools · Herat Boys HS</p>
+
 # VoiceAI — ESP32 + PAM8406 local AI voice assistant
 
 Ask a question on your phone (type it or say it), the ESP32 sends it to **Qwen 2.5 1.5B running in Ollama on your PC**, and the answer is shown in a cloud‑AI style chat app **and spoken through a PAM8406 speaker**. The app also shows token usage for every answer, like the usage pages of cloud AI services.

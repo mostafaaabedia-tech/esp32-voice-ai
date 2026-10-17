@@ -1,5 +1,16 @@
 package com.voiceai.esp32.ui
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.Eco
+import androidx.compose.material.icons.outlined.EmojiEmotions
+import androidx.compose.material.icons.outlined.RocketLaunch
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -99,7 +110,7 @@ fun ChatScreen(vm: MainViewModel, onMenu: () -> Unit, onMic: () -> Unit, draft: 
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (msgs.isEmpty() && !vm.busy) {
-                EmptyState { vm.send(it) }
+                EmptyState(vm, onPick = { vm.send(it) }, onMic = onMic)
             } else {
                 LazyColumn(
                     state = list,
@@ -136,9 +147,11 @@ private fun TopBar(vm: MainViewModel, onMenu: () -> Unit) {
         IconButton(onClick = onMenu) { Icon(Icons.Filled.Menu, "Chats") }
         Row(
             Modifier
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
                 .clickable { vm.screen = com.voiceai.esp32.Screen.SETTINGS }
-                .padding(horizontal = 10.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             StatusDot(ok = vm.aiReachable, warn = vm.deviceOnline || vm.pcOnline)
@@ -148,7 +161,11 @@ private fun TopBar(vm: MainViewModel, onMenu: () -> Unit) {
                     vm.settings.model, fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp),
                 )
-                Text(vm.settings.mode.label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    (if (vm.aiReachable) "Connected · " else "Offline · ") + vm.settings.mode.label,
+                    fontSize = 11.sp,
+                    color = if (vm.aiReachable) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Icon(Icons.Outlined.KeyboardArrowDown, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
@@ -158,48 +175,114 @@ private fun TopBar(vm: MainViewModel, onMenu: () -> Unit) {
     }
 }
 
+private data class Idea(val icon: ImageVector, val title: String, val sub: String, val color: Color, val prompt: String)
+
+private val IDEAS = listOf(
+    Idea(Icons.Outlined.RocketLaunch, "Space fact", "Something amazing about the universe", Color(0xFF7FA8FF), "Tell me a fun fact about space."),
+    Idea(Icons.Outlined.AutoStories, "Word of the day", "Learn a new English word", Color(0xFFB38CFF), "Give me an English word of the day with its meaning and an example."),
+    Idea(Icons.Outlined.Eco, "Greenhouse", "How do greenhouses keep plants warm?", Color(0xFF6FD08C), "Explain how a greenhouse keeps plants warm."),
+    Idea(Icons.Outlined.EmojiEmotions, "Make me laugh", "A short, clean joke", Color(0xFFFFC266), "Tell me a short joke."),
+)
+
+private fun headlines(): List<String> {
+    val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+    val first = when {
+        h < 5 -> "Night owl mode on 🦉"
+        h < 12 -> "Fresh morning, fresh questions ☀️"
+        h < 17 -> "Curious this afternoon? 🚀"
+        h < 21 -> "Evening brain, let's go ✨"
+        else -> "Late-night questions welcome 🌙"
+    }
+    return listOf(first, "Ask me anything, I'll say it out loud 🔊", "Your own AI, running on your PC 💡", "Tap the mic and just talk 🎙️")
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EmptyState(onPick: (String) -> Unit) {
-    val h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-    val greet = when {
-        h < 5 -> "Up late? Ask me anything."
-        h < 12 -> "Good morning. What can I help with?"
-        h < 18 -> "Good afternoon. What can I help with?"
-        else -> "Good evening. What can I help with?"
+private fun EmptyState(vm: MainViewModel, onPick: (String) -> Unit, onMic: () -> Unit) {
+    val lines = remember { headlines() }
+    var idx by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) { delay(3500); idx = (idx + 1) % lines.size }
     }
+    val s = vm.settings
+    val needsSetup = s.pcHost.isBlank() || (s.route.onSpeaker && s.espHost.isBlank())
+
     Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Logo(52.dp)
-        Spacer(Modifier.height(18.dp))
-        Text(greet, fontSize = 26.sp, fontFamily = FontFamily.Serif, textAlign = TextAlign.Center, lineHeight = 32.sp)
-        Spacer(Modifier.height(8.dp))
+        BrandHeader()
+        Spacer(Modifier.height(28.dp))
+        Crossfade(targetState = idx, animationSpec = tween(600), label = "headline") { i ->
+            GradientText(lines[i], 26.sp, Modifier.fillMaxWidth().heightIn(min = 70.dp))
+        }
         Text(
-            "Type or tap the mic. Answers play on your ESP32 speaker.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, fontSize = 15.sp,
+            "Type a question or tap the mic. The answer shows here and plays on your ESP32 speaker.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, fontSize = 14.sp, lineHeight = 20.sp,
+            modifier = Modifier.padding(horizontal = 12.dp),
         )
-        Spacer(Modifier.height(22.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(
-                "Fun space fact" to "Tell me a fun fact about space.",
-                "Word of the day" to "Give me an English word of the day with its meaning.",
-                "How greenhouses work" to "Explain how a greenhouse keeps plants warm.",
-                "Tell a joke" to "Tell me a short joke.",
-            ).forEach { (label, prompt) ->
-                Text(
-                    label, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(MaterialTheme.colorScheme.surface)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
-                        .clickable { onPick(prompt) }
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                )
+        Spacer(Modifier.height(18.dp))
+
+        if (needsSetup) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Warn.copy(alpha = 0.14f))
+                    .clickable { vm.screen = com.voiceai.esp32.Screen.SETTINGS }
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Settings, null, tint = Warn)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Finish setup", fontWeight = FontWeight.SemiBold)
+                    Text("Add your PC and ESP32 addresses in Settings", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Spacer(Modifier.height(14.dp))
+        }
+
+        // 2 x 2 idea cards
+        IDEAS.chunked(2).forEach { row ->
+            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { idea ->
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(18.dp))
+                            .clickable { onPick(idea.prompt) }
+                            .padding(14.dp),
+                    ) {
+                        Box(
+                            Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(idea.color.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(idea.icon, null, tint = idea.color, modifier = Modifier.size(20.dp)) }
+                        Spacer(Modifier.height(10.dp))
+                        Text(idea.title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                        Text(idea.sub, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 16.sp, minLines = 2)
+                    }
+                }
             }
         }
+
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Brush.linearGradient(BrandGradient))
+                .clickable(onClick = onMic)
+                .padding(horizontal = 26.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Mic, null, tint = Color.White)
+            Spacer(Modifier.width(10.dp))
+            Text("Tap to talk", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -207,11 +290,11 @@ private fun EmptyState(onPick: (String) -> Unit) {
 private fun UserBubble(text: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         Text(
-            text, fontSize = 16.sp, lineHeight = 22.sp,
+            text, fontSize = 16.sp, lineHeight = 22.sp, color = Color.White,
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .background(Brush.linearGradient(listOf(Color(0xFF1C5C86), Color(0xFF1D8C9A))))
                 .padding(horizontal = 15.dp, vertical = 10.dp),
         )
     }
@@ -406,16 +489,21 @@ private fun Composer(vm: MainViewModel, text: String, onText: (String) -> Unit, 
                 },
             )
             Box(
-                Modifier.size(42.dp).clip(CircleShape).clickable(enabled = !vm.busy, onClick = onMic),
+                Modifier.size(42.dp).clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .clickable(enabled = !vm.busy, onClick = onMic),
                 contentAlignment = Alignment.Center,
-            ) { Icon(Icons.Filled.Mic, "Speak", tint = MaterialTheme.colorScheme.onSurface) }
+            ) { Icon(Icons.Filled.Mic, "Speak", tint = MaterialTheme.colorScheme.primary) }
             Spacer(Modifier.width(4.dp))
             val canSend = text.isNotBlank() && !vm.busy
             Box(
                 Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(if (vm.busy || canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                    .background(
+                        if (vm.busy || canSend) Brush.linearGradient(BrandGradient)
+                        else Brush.linearGradient(listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surfaceVariant))
+                    )
                     .clickable(enabled = vm.busy || canSend) { if (vm.busy) vm.stop() else onSend() },
                 contentAlignment = Alignment.Center,
             ) {
