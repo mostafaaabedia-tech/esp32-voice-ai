@@ -23,6 +23,7 @@
 #include <ESP8266SAM.h>
 
 #include "config.h"
+#include "types.h"
 #include "web_page.h"
 #include "dac_out.h"
 
@@ -91,12 +92,6 @@ const char *stateName(JobState s) {
     default:          return "idle";
   }
 }
-
-struct Usage {
-  uint32_t promptTokens = 0, completionTokens = 0;
-  uint32_t totalMs = 0, loadMs = 0, promptMs = 0, genMs = 0;
-  float tokensPerSec = 0;
-};
 
 volatile JobState state = ST_IDLE;
 uint32_t jobId = 0;            // increases on every /api/ask
@@ -272,7 +267,7 @@ bool runChat(const String &body, String &reply, Usage &u, String &err) {
 
   HTTPClient http;
   http.setConnectTimeout(4000);
-  http.setTimeout(OLLAMA_TIMEOUT_MS);      // v1 used the 5 s default and timed out
+  http.setTimeout(OLLAMA_TIMEOUT_MS);      // v1 used the 5 s default and timed out (max 65535 ms)
   String url = "http://" + cfg.ollamaHost + ":" + String(cfg.ollamaPort) + "/api/chat";
   if (!http.begin(url)) { err = "Bad Ollama URL"; return false; }
   http.addHeader("Content-Type", "application/json");

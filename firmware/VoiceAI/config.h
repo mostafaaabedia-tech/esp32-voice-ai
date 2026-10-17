@@ -23,7 +23,7 @@
 #define DEFAULT_MAX_WORDS    40    // soft limit put into the system prompt
 #define DEFAULT_NUM_PREDICT  160   // hard limit on generated tokens
 #define DEFAULT_NUM_CTX      2048  // context window sent to Ollama
-#define OLLAMA_TIMEOUT_MS    90000 // first answer can be slow while the model loads
+#define OLLAMA_TIMEOUT_MS    65000 // first answer can be slow while the model loads (max 65535)
 
 // ---- Voice --------------------------------------------------------------------
 // 0 = SAM  : robot voice generated ON the ESP32, works fully offline

@@ -124,7 +124,7 @@ To try the UI on a computer: `npm run serve` and open http://localhost:8080 (tur
 | `AudioOutputI2S(0, InternalDAC)` — in ESP8266Audio 2.x the DAC mode is ignored, so **no sound** reached the PAM8406 | Own `DacOutput` class on GPIO25 with working volume and correct sample rate |
 | Google Translate TTS URL is `http://` — Google redirects to https, which the stream class can't play, and it needs internet | Offline SAM voice on the ESP32 + optional offline PC voice |
 | `/getreply` built JSON by hand → any `"` or new line in the answer broke the app | All JSON made with ArduinoJson |
-| `HTTPClient` default 5 s timeout → first answer (model loading) always failed | 90 s timeout, model kept loaded for 30 min |
+| `HTTPClient` default 5 s timeout → first answer (model loading) always failed | 65 s timeout, model kept loaded for 30 min |
 | App gave up after 15 s | Waits up to 150 s with a live timer |
 | `urlEncode` used `sprintf("%02X")` on signed chars → buffer overflow / crash on non‑English text | Safe unsigned encoder |
 | `new AudioFileSourceHTTPStream` every answer, never deleted → memory leak, reboot after a few questions | Freed after each answer |
