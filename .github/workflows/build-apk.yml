@@ -5,6 +5,9 @@ on:
     paths: ["app/**", ".github/workflows/build-apk.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -53,3 +56,18 @@ jobs:
         with:
           name: VoiceAI-apk
           path: app/android/app/build/outputs/apk/debug/app-debug.apk
+
+      # Also publish the APK on the "apk" branch so it can be downloaded
+      # directly: github.com/<you>/esp32-voice-ai/raw/apk/VoiceAI.apk
+      - name: Publish APK to apk branch
+        if: github.ref == 'refs/heads/main'
+        working-directory: .
+        run: |
+          mkdir -p /tmp/out && cp app/android/app/build/outputs/apk/debug/app-debug.apk /tmp/out/VoiceAI.apk
+          cd /tmp/out
+          git init -q -b apk
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add VoiceAI.apk
+          git commit -qm "VoiceAI APK from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" apk
