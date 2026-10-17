@@ -19,20 +19,27 @@ Ask a question on your phone (type it or say it), the ESP32 sends it to **Qwen 2
 | Folder | What it is |
 |---|---|
 | `firmware/` | ESP32 code (Arduino IDE **or** PlatformIO) |
-| `app/` | Android app (Capacitor, plain HTML/JS — easy to edit) |
+| `android/` | Native Android app (Kotlin + Jetpack Compose) |
 | `pc/` | Helpers for the PC: start Ollama for the LAN, optional nicer voice server |
 | `.github/workflows/` | Builds the **APK** and the **firmware .bin** automatically on GitHub |
 
+## Two ways to reach the AI (pick in Settings)
+
+| Mode | Path | Good for |
+|---|---|---|
+| **Direct to PC** (default) | Phone → Ollama on the PC, answer streams in live → phone sends the text to the ESP32 to speak | Fastest, words appear as they are generated |
+| **Through ESP32** | Phone → ESP32 → Ollama (like the original sketch) → ESP32 speaks | Works even if only the ESP32 knows the PC address |
+
 ## App features
 
-- Chat screen like ChatGPT / Claude: chat history drawer, new chat, copy, regenerate, light/dark theme
-- **Mic button** → speak your question (Android speech recognition), auto‑send or edit first
+- Native Kotlin app, chat screen like ChatGPT / Claude: chat history drawer, new chat, copy, regenerate, stop, light/dark theme
+- Live streaming answers in Direct mode
+- **Mic button** → full-screen listening view with a voice-reactive orb, auto-send or edit first
 - **Where answers play**: ESP32 speaker, phone, both, or silent (chip above the text box)
-- Per answer: **input tokens · output tokens · tokens/second · time** (tap it for model‑load time)
-- Context‑window bar under the text box (how full the model's memory is)
-- **Usage page**: total / today tokens, input vs output split, tokens‑per‑answer chart, speed chart, context meter, ESP32 counters since boot, top chats, per‑model totals
-- **Settings**: ESP32 address + live device status (WiFi signal, memory, uptime, Ollama online), model picker (from your installed Ollama models), system prompt, max words, max tokens, context size, chat memory length, speaker volume, robot/PC voice, speech language
-- **Demo mode** to try the app without any hardware
+- Per answer: **input · output tokens · tokens/second · time** (tap for model-load time)
+- Context-window bar under the text box
+- **Usage page**: total / today tokens, input vs output split, tokens-per-answer chart, speed chart, context meter, ESP32 counters since boot, top chats, per-model totals
+- **Settings**: mode, PC + ESP32 addresses with live status, model picker (your installed Ollama models), system prompt, max words / tokens, chat memory, speaker volume, robot/PC voice, speech language
 
 ## 1. Wiring (ESP32 → PAM8406)
 
@@ -90,21 +97,14 @@ Open the Serial Monitor at 115200 — it prints the ESP32's IP and says "Voice a
 
 ## 4. Phone app (APK)
 
-GitHub builds it for you: **Actions → Build Android APK → latest run → Artifacts → VoiceAI-apk**. Unzip, install `app-debug.apk` (allow *install unknown apps*).
+Direct download (always the newest build): **https://github.com/mostafaaabedia-tech/esp32-voice-ai/raw/apk/VoiceAI.apk**
+or *Actions → Build Android APK → Artifacts → VoiceAI-apk*.
 
-First start: Settings → type the ESP32 IP (from the Serial Monitor) → **Connect**. The dot next to the model name turns green when the ESP32 and Ollama are both online (yellow = ESP32 ok but Ollama not reachable).
+First start: Settings → type the **PC address** (e.g. `192.168.80.189`) and the **ESP32 address** (from the Serial Monitor) → **Save & test connection**.
 
-Voice input uses Android's speech service (Google app). For offline voice typing, download the offline speech pack for your language in the Google app's settings.
+Voice input uses Android's speech service (Google app). For offline voice typing, download the offline speech pack for your language in the Google app settings.
 
-Build it yourself (needs Android Studio / SDK):
-```
-cd app
-npm install
-npm run android:add
-npx cap sync android
-npm run apk
-```
-To try the UI on a computer: `npm run serve` and open http://localhost:8080 (turn on Demo mode).
+Build it yourself: open the `android/` folder in Android Studio and press Run.
 
 ## ESP32 HTTP API
 
@@ -124,6 +124,7 @@ To try the UI on a computer: `npm run serve` and open http://localhost:8080 (tur
 | `AudioOutputI2S(0, InternalDAC)` — in ESP8266Audio 2.x the DAC mode is ignored, so **no sound** reached the PAM8406 | Own `DacOutput` class on GPIO25 with working volume and correct sample rate |
 | Google Translate TTS URL is `http://` — Google redirects to https, which the stream class can't play, and it needs internet | Offline SAM voice on the ESP32 + optional offline PC voice |
 | `/getreply` built JSON by hand → any `"` or new line in the answer broke the app | All JSON made with ArduinoJson |
+| Firmware forced `num_ctx`, which made Ollama restart its engine (slow, and fails if the install is broken) | Context size is only sent if you set one |
 | `HTTPClient` default 5 s timeout → first answer (model loading) always failed | 65 s timeout, model kept loaded for 30 min |
 | App gave up after 15 s | Waits up to 150 s with a live timer |
 | `urlEncode` used `sprintf("%02X")` on signed chars → buffer overflow / crash on non‑English text | Safe unsigned encoder |
@@ -131,4 +132,4 @@ To try the UI on a computer: `npm run serve` and open http://localhost:8080 (tur
 | Shared Strings used from two tasks with no lock | Mutex around shared state |
 | No memory: every question started fresh | App sends the recent conversation (configurable) |
 | No reconnect if WiFi drops | Auto‑reconnect + health check every 15 s |
-| Web Speech API in the page — Chrome blocks the mic on `http://` | Native speech recognition in the Android app |
+| Web Speech API in the page — Chrome blocks the mic on `http://` | Native Kotlin app with Android speech recognition |
