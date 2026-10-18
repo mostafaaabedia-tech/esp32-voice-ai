@@ -10,3 +10,17 @@ struct Usage {
 };
 
 enum JobState { ST_IDLE, ST_THINKING, ST_SPEAKING, ST_ERROR };
+
+// What the OLED face should show (filled by getFaceInfo() in VoiceAI.ino)
+enum FaceMode { FACE_BOOT, FACE_WIFI, FACE_IDLE, FACE_LISTENING, FACE_THINKING, FACE_SPEAKING, FACE_ERROR };
+
+struct FaceInfo {
+  FaceMode mode = FACE_BOOT;
+  bool wifiOk = false;
+  int rssi = 0;
+  bool aiOnline = false;
+  uint32_t modeSinceMs = 0;     // millis() when this mode started
+  uint8_t audioLevel = 0;       // 0..255 speaker loudness (for the mouth)
+  char ip[16] = "";
+  char text[160] = "";          // reply / error text for the scrolling line
+};

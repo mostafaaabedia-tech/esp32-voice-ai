@@ -75,6 +75,25 @@ Tips
 - Many PAM8406 boards have a **MODE** pin/jumper: Class D (default) is fine; switch to Class AB only if an AM radio nearby buzzes.
 - The ESP32 DAC is 8‑bit, so expect "walkie‑talkie" quality. That's normal.
 
+## 1b. OLED face (1.5" 128x128, optional)
+
+<p align="center"><img src="docs/oled-face-preview.gif" width="200" alt="OLED face animation"></p>
+
+The ESP32 shows an animated robot face: boot logo with credits → WiFi spinner → idle eyes that blink, look around and fall asleep after 2 min (and the ESP32's **IP address** at the bottom) → **listening** rings when you tap the mic → **thinking** eyes + orbiting dots → **speaking** smiling eyes with a mouth that moves with the real speaker sound and the answer scrolling → **sad** eyes with the error message.
+
+Pick your chip in `firmware/VoiceAI/config.h` → `OLED_TYPE`:
+
+| `OLED_TYPE` | Chip | Colours | Pins | Wiring to ESP32 |
+|---|---|---|---|---|
+| `1` (default) | SSD1327 | 16 grays | 4 pins, I2C | VCC→3V3, GND→GND, SCL→GPIO22, SDA→GPIO21 |
+| `2` | SSD1351 | full colour | 7 pins, SPI | VCC→3V3, GND→GND, DIN→GPIO23, CLK→GPIO18, CS→GPIO5, DC→GPIO16, RST→GPIO17 |
+| `3` | SH1107 | white | 4 pins, I2C | same as type 1 |
+| `0` | – | – | – | no display |
+
+Arduino IDE libraries to add: **Adafruit GFX Library**, **Adafruit BusIO**, and the one for your chip: **Adafruit SSD1327**, **Adafruit SSD1351 library** or **Adafruit SH110X**.
+
+If the Serial Monitor says `display not found`, check SDA/SCL, then try the other `OLED_TYPE`.
+
 ## 2. PC: Ollama on your network
 
 1. Install Ollama from ollama.com, then `ollama pull qwen2.5:1.5b`.
@@ -100,7 +119,7 @@ Edit `firmware/VoiceAI/config.h`: WiFi name/password and your PC's IP.
 
 **Arduino IDE**
 1. Boards Manager → install **esp32 by Espressif Systems 3.x**.
-2. Library Manager → install: **ESPAsyncWebServer** (by ESP32Async), **AsyncTCP** (by ESP32Async), **ArduinoJson** (by Benoit Blanchon, v7), **ESP8266Audio** (by Earle Philhower, v2.x), **ESP8266SAM** (by Earle Philhower).
+2. Library Manager → install: **ESPAsyncWebServer** (by ESP32Async), **AsyncTCP** (by ESP32Async), **ArduinoJson** (by Benoit Blanchon, v7), **ESP8266Audio** (by Earle Philhower, v2.x), **ESP8266SAM** (by Earle Philhower), plus the OLED libraries from section 1b.
 3. Open `firmware/VoiceAI/VoiceAI.ino`, board **ESP32 Dev Module**, Partition scheme **Huge APP (3MB No OTA)**, upload.
 
 **PlatformIO**: `pio run -d firmware -t upload` (all libraries install automatically).
@@ -129,6 +148,7 @@ Build it yourself: open the `android/` folder in Android Studio and press Run.
 | `GET /api/status` | – | `{"id","done_id","state":"idle/thinking/speaking/error","reply","error","usage":{prompt_tokens, completion_tokens, total_tokens, tokens_per_sec, total_ms, load_ms, prompt_ms, gen_ms, num_ctx}}` |
 | `POST /api/speak` | `{"text":"hello"}` | speaks any text |
 | `POST /api/stop` | – | stops speech |
+| `POST /api/face` | `{"state":"listening"}` (or `thinking`, `error`, `idle`, optional `"text"`) | sets the OLED face |
 | `POST /api/config` | any of `ollama_host, ollama_port, model, system_prompt, max_words, num_predict, num_ctx, voice_mode, tts_port, volume` | saved in flash |
 
 ## What was fixed from the first version

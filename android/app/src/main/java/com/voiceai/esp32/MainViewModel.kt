@@ -263,6 +263,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 when (s.mode) {
                     Mode.DIRECT -> {
                         if (s.pcHost.isBlank()) throw IllegalStateException("Add your PC address in Settings")
+                        face("thinking")
                         model = s.model
                         val msgs = JSONArray()
                         msgs.put(JSONObject().put("role", "system").put("content", systemPrompt(s)))
@@ -289,18 +290,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                 // Play the answer
                 if (s.route.onPhone) phoneVoice.speak(plain(reply), s.lang)
+                if (s.mode == Mode.DIRECT && !s.route.onSpeaker) face("idle")
                 if (s.mode == Mode.DIRECT && s.route.onSpeaker && s.espHost.isNotBlank()) {
                     try { Api.espSpeak(s.espHost, plain(reply)) } catch (e: Exception) { toast = e.message }
                 }
                 if (s.route.onSpeaker) refreshStatus()
                 if (s.handsFree) launch { waitUntilQuiet(s); listenRequest++ }
             } catch (e: CancellationException) {
+                if (s.mode == Mode.DIRECT) face("idle")
                 val partial = liveText.trim()
                 if (partial.isNotEmpty()) {
                     putChat(chat.copy(messages = chat.messages + Message("assistant", "$partial …", model = s.model)))
                 }
             } catch (e: Exception) {
                 error = e.message ?: "Something went wrong"
+                if (s.mode == Mode.DIRECT) face("error", error)
             } finally {
                 busy = false
                 liveText = ""
@@ -320,6 +324,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             delay(700)
         }
         delay(300)
+    }
+
+    /** Make the ESP32's OLED face show listening / thinking / error / idle. */
+    fun face(state: String, text: String? = null) {
+        val host = settings.espHost
+        if (host.isBlank()) return
+        viewModelScope.launch { Api.espFace(host, state, text) }
     }
 
     // ------------------------------------------------------------------ audio

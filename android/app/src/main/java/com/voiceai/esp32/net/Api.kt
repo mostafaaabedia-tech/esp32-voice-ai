@@ -98,6 +98,13 @@ object Api {
         if (code != 200) throw ApiException(errorOf(body, code))
     }
 
+    /** Tell the OLED face what the phone is doing: listening, thinking, error, idle. */
+    suspend fun espFace(host: String, state: String, text: String? = null) {
+        val body = JSONObject().put("state", state)
+        if (text != null) body.put("text", text)
+        runCatching { request("POST", base(host) + "/api/face", body, 2500) }
+    }
+
     suspend fun espStop(host: String) {
         runCatching { request("POST", base(host) + "/api/stop", JSONObject(), 3000) }
     }

@@ -121,6 +121,7 @@ private fun App(vm: MainViewModel) {
         if (!listening) return
         listening = false
         voice.cancel()
+        if (!send || text.isBlank()) vm.face("idle")
         val t = text.trim()
         if (send && t.isNotEmpty()) {
             if (vm.settings.autoSend) vm.send(t) else vm.draft = t
@@ -130,6 +131,7 @@ private fun App(vm: MainViewModel) {
     fun startListening() {
         if (!voice.available) { vm.toast = "No speech service. Install or update the Google app."; return }
         heard = ""; level = 0f; listening = true
+        vm.face("listening")
         voice.start(
             vm.settings.lang,
             onPartial = { heard = it },

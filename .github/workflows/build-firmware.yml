@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          pio run -d firmware 2>&1 | tee build.log
+          pio run -d firmware -e esp32dev -e oled_color -e oled_mono -e no_oled 2>&1 | tee build.log
           code=${PIPESTATUS[0]}
           if [ $code -ne 0 ]; then
             # show compiler errors as annotations on the run page

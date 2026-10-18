@@ -4,6 +4,7 @@
 //  Phone app  --HTTP/JSON-->  ESP32  --HTTP-->  Ollama (qwen2.5:1.5b on your PC)
 //                               |
 //                               +--> internal DAC (GPIO25) --> PAM8406 --> speaker
+//                               +--> 1.5" OLED: animated face (oled.h)
 //
 //  Board package : esp32 by Espressif, version 3.x (Arduino IDE) / pioarduino
 //  Libraries     : ESP32Async/ESPAsyncWebServer, ESP32Async/AsyncTCP,
@@ -26,8 +27,9 @@
 #include "types.h"
 #include "web_page.h"
 #include "dac_out.h"
+#include "oled.h"
 
-#define FW_VERSION "2.0.0"
+#define FW_VERSION "2.1.0"
 #define MAX_BODY_BYTES 16384
 
 // ---------------------------------------------------------------- settings --
@@ -102,6 +104,14 @@ Usage lastUsage;
 
 String speakQueue;             // text waiting to be spoken
 volatile bool stopAudio = false;
+
+// what the OLED face shows
+String screenText;              // reply / error text that scrolls on the OLED
+FaceMode faceOverride = FACE_IDLE;  // set by the app (/api/face) e.g. listening
+uint32_t faceOverrideUntil = 0;
+FaceMode lastFaceMode = FACE_BOOT;
+uint32_t faceSince = 0;
+uint32_t bootMs = 0;
 
 // lifetime counters (since boot)
 uint32_t sessionPrompt = 0, sessionCompletion = 0, sessionRequests = 0;
@@ -301,6 +311,55 @@ bool runChat(const String &body, String &reply, Usage &u, String &err) {
   return true;
 }
 
+// ------------------------------------------------------------- OLED face --
+FaceInfo getFaceInfo() {
+  FaceInfo f;
+  uint32_t now = millis();
+  f.wifiOk = WiFi.status() == WL_CONNECTED;
+  f.rssi = f.wifiOk ? WiFi.RSSI() : 0;
+  if (f.wifiOk) strlcpy(f.ip, WiFi.localIP().toString().c_str(), sizeof f.ip);
+  f.audioLevel = dac ? dac->level() : 0;
+
+  FaceMode m;
+  static JobState prevState = ST_IDLE;
+  static uint32_t errorAt = 0;
+  LOCK();
+  if (state == ST_ERROR && prevState != ST_ERROR) errorAt = now;
+  prevState = state;
+  f.aiOnline = ollamaOnline;
+  if (now - bootMs < 2600) m = FACE_BOOT;
+  else if (!f.wifiOk) m = FACE_WIFI;
+  else if (state == ST_THINKING) m = FACE_THINKING;
+  else if (state == ST_SPEAKING) m = FACE_SPEAKING;
+  else if (faceOverrideUntil && (int32_t)(faceOverrideUntil - now) > 0) m = faceOverride;
+  else if (state == ST_ERROR && now - errorAt < 8000) m = FACE_ERROR;   // sad face for 8 s
+  else m = FACE_IDLE;
+  if (m != lastFaceMode) { lastFaceMode = m; faceSince = now; }
+  f.mode = m;
+  f.modeSinceMs = faceSince;
+  strlcpy(f.text, screenText.c_str(), sizeof f.text);
+  UNLOCK();
+  return f;
+}
+
+/** OLED can only draw plain ASCII: drop emojis / other scripts. */
+String asciiOnly(const String &in) {
+  String out;
+  out.reserve(in.length());
+  for (size_t i = 0; i < in.length(); i++) {
+    uint8_t c = in[i];
+    if (c >= 0x80) {
+      while (i + 1 < in.length() && ((uint8_t)in[i + 1] & 0xC0) == 0x80) i++;
+      continue;
+    }
+    if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+    if (c == '*' || c == '#' || c == '`') continue;
+    out += (char)c;
+  }
+  out.trim();
+  return out;
+}
+
 // ------------------------------------------------------------- web server --
 AsyncWebServer server(80);
 
@@ -426,6 +485,24 @@ void setupRoutes() {
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy"); }
     stopAudio = true;
     speakQueue = in["text"].as<String>();
+    screenText = asciiOnly(speakQueue).substring(0, 150);
+    faceOverrideUntil = 0;
+    UNLOCK();
+    r->send(200, "application/json", "{\"ok\":true}");
+  }, nullptr, collectBody);
+
+  // The app tells the face what it is doing: {"state":"listening|thinking|error|idle","text":"..."}
+  server.on("/api/face", HTTP_POST, [](AsyncWebServerRequest *r) {
+    JsonDocument in;
+    if (deserializeJson(in, bodyOf(r))) return sendError(r, 400, "Invalid JSON");
+    String st = in["state"] | "idle";
+    LOCK();
+    uint32_t now = millis();
+    if (st == "listening")      { faceOverride = FACE_LISTENING; faceOverrideUntil = now + 20000; }
+    else if (st == "thinking")  { faceOverride = FACE_THINKING;  faceOverrideUntil = now + 120000; }
+    else if (st == "error")     { faceOverride = FACE_ERROR;     faceOverrideUntil = now + 8000; }
+    else                        { faceOverrideUntil = 0; }
+    if (in["text"].is<const char *>()) screenText = asciiOnly(in["text"].as<String>()).substring(0, 150);
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
@@ -490,9 +567,11 @@ void setup() {
   Serial.println("\n=== VoiceAI " FW_VERSION " ===");
   pinMode(STATUS_LED_PIN, OUTPUT);
   stateLock = xSemaphoreCreateMutex();
+  bootMs = millis();
   loadSettings();
 
   dac = new DacOutput();
+  oledBegin();                 // boot animation runs while WiFi connects
   dac->SetGain(cfg.volume);
   sam = new ESP8266SAM();
   sam->SetVoice(ESP8266SAM::VOICE_SAM);
@@ -554,11 +633,13 @@ void loop() {
       sessionRequests++;
       if (ok) {
         lastReply = reply; lastUsage = u; lastError = "";
+        screenText = asciiOnly(reply).substring(0, 150);
         sessionPrompt += u.promptTokens;
         sessionCompletion += u.completionTokens;
         state = speak ? ST_SPEAKING : ST_IDLE;
       } else {
         lastError = err; lastReply = ""; lastUsage = Usage();
+        screenText = asciiOnly(err).substring(0, 150);
         state = ST_ERROR;
       }
     }

@@ -17,6 +17,8 @@ class DacOutput : public AudioOutput {
   static const size_t BUF = 512;
   uint8_t buf[BUF];
   size_t fill = 0;
+  uint16_t peak = 0;
+  volatile uint8_t lvl = 0;     // loudness for the OLED mouth
 
   void open() {
     close();
@@ -60,6 +62,8 @@ public:
     if (!handle || openRate != hertz) open();
     int32_t v = channels == 2 ? ((int32_t)s[0] + s[1]) / 2 : s[0];
     v = Amplify((int16_t)v);
+    uint16_t a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
     buf[fill++] = (uint8_t)((v + 32768) >> 8);   // 16-bit signed -> 8-bit unsigned
     if (fill == BUF) flush();
     return true;
@@ -68,11 +72,18 @@ public:
   void flush() override {
     if (handle && fill) dac_continuous_write(handle, buf, fill, NULL, -1);
     fill = 0;
+    lvl = (uint8_t)min<uint32_t>(255, peak >> 6);   // ~ 0..255
+    peak = 0;
   }
+
+  /** Loudness of the sound playing right now, 0..255. */
+  uint8_t level() const { return lvl; }
+  void quiet() { lvl = 0; }
 
   // Finish the sound and leave the DAC at mid level (no pop, no DC on the amp)
   bool stop() override {
     flush();
+    lvl = 0;
     if (handle) {
       memset(buf, 128, BUF);
       dac_continuous_write(handle, buf, BUF, NULL, -1);
