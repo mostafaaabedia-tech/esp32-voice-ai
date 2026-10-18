@@ -85,14 +85,14 @@ Pick your chip in `firmware/VoiceAI/config.h` → `OLED_TYPE`:
 
 | `OLED_TYPE` | Chip | Colours | Pins | Wiring to ESP32 |
 |---|---|---|---|---|
-| `1` (default) | SSD1327 | 16 grays | 4 pins, I2C | VCC→3V3, GND→GND, SCL→GPIO22, SDA→GPIO21 |
+| `1` | SSD1327 | 16 grays | 4 pins, I2C | VCC→3V3, GND→GND, SCL→GPIO22, SDA→GPIO21 |
 | `2` | SSD1351 | full colour | 7 pins, SPI | VCC→3V3, GND→GND, DIN→GPIO23, CLK→GPIO18, CS→GPIO5, DC→GPIO16, RST→GPIO17 |
-| `3` | SH1107 | white | 4 pins, I2C | same as type 1 |
+| `3` (default) | SH1107 | white | 4 pins, I2C (SDA SCL GND VCC) | same as type 1 |
 | `0` | – | – | – | no display |
 
 Arduino IDE libraries to add: **Adafruit GFX Library**, **Adafruit BusIO**, and the one for your chip: **Adafruit SSD1327**, **Adafruit SSD1351 library** or **Adafruit SH110X**.
 
-If the Serial Monitor says `display not found`, check SDA/SCL, then try the other `OLED_TYPE`.
+If the Serial Monitor says `display not found`, check SDA/SCL. If the screen shows random noise dots, the `OLED_TYPE` is wrong: try the other I2C type (1 or 3).
 
 ## 2. PC: Ollama on your network
 

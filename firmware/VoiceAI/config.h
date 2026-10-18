@@ -34,18 +34,19 @@
 
 // ---- OLED display (1.5 inch, 128x128) -----------------------------------------
 // Look at the back of your display or its shop page and pick the chip:
-//   1 = SSD1327  grayscale, I2C  (4 pins: VCC GND SCL SDA)  <- most common 1.5"
+//   1 = SSD1327  grayscale, I2C  (4 pins, address 0x3D)
 //   2 = SSD1351  full colour, SPI (7 pins: VCC GND DIN CLK CS DC RST)
-//   3 = SH1107   monochrome, I2C (4 pins)
+//   3 = SH1107   white, I2C (4 pins SDA SCL GND VCC, address 0x3C)  <- your screen
+//   Tip: if the screen shows random "noise" dots, you picked the wrong chip.
 //   0 = no display
 #ifndef OLED_TYPE
-#define OLED_TYPE        1
+#define OLED_TYPE        3
 #endif
 #define OLED_ROTATION    0      // 0-3, turn the picture if the screen is mounted sideways
 // I2C screens (type 1 and 3)
 #define OLED_SDA         21
 #define OLED_SCL         22
-#define OLED_I2C_ADDR    0x3D   // SSD1327 is usually 0x3D, SH1107 0x3C (the other one is tried too)
+#define OLED_I2C_ADDR    0x3C   // SH1107 is usually 0x3C, SSD1327 0x3D (the other one is tried too)
 // SPI screen (type 2)
 #define OLED_SCK         18     // CLK / SCL on the board
 #define OLED_MOSI        23     // DIN / SDA on the board
