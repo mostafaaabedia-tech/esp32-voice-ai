@@ -23,4 +23,6 @@ struct FaceInfo {
   uint8_t audioLevel = 0;       // 0..255 speaker loudness (for the mouth)
   char ip[16] = "";
   char text[160] = "";          // reply / error text for the scrolling line
+  char sub[720] = "";           // subtitle: exactly what the speaker is saying
+  int subPos = -1;              // index in sub[] being spoken right now (-1 = none)
 };

@@ -79,7 +79,7 @@ Tips
 
 <p align="center"><img src="docs/oled-face-preview.gif" width="200" alt="OLED face animation"></p>
 
-The ESP32 shows an animated robot face: boot logo with credits → WiFi spinner → idle eyes that blink, look around and fall asleep after 2 min (and the ESP32's **IP address** at the bottom) → **listening** rings when you tap the mic → **thinking** eyes + orbiting dots → **speaking** smiling eyes with a mouth that moves with the real speaker sound and the answer scrolling → **sad** eyes with the error message.
+The ESP32 shows an animated robot face: boot logo with credits → WiFi spinner → idle eyes that blink, look around and fall asleep after 2 min (and the ESP32's **IP address** at the bottom) → **listening** rings when you tap the mic → **thinking** eyes + orbiting dots → **speaking** smiling eyes, a mouth that moves with the real speaker sound, and **karaoke subtitles synced with the voice** (the word being spoken is highlighted, lines scroll as it talks) → **sad** eyes with the error message.
 
 Pick your chip in `firmware/VoiceAI/config.h` → `OLED_TYPE`:
 

@@ -29,7 +29,7 @@
 #include "dac_out.h"
 #include "oled.h"
 
-#define FW_VERSION "2.1.0"
+#define FW_VERSION "2.2.0"
 #define MAX_BODY_BYTES 16384
 
 // ---------------------------------------------------------------- settings --
@@ -105,6 +105,14 @@ Usage lastUsage;
 String speakQueue;             // text waiting to be spoken
 volatile bool stopAudio = false;
 
+// subtitles: what the speaker is saying right now (shown on the OLED)
+String subText;                 // full spoken text (ASCII, as sent to the voice)
+volatile int subChunkStart = 0; // robot voice: current phrase start / length / start time
+volatile int subChunkLen = 0;
+volatile uint32_t subChunkMs = 0;
+volatile int subStreamPos = -1; // PC voice: position worked out from the audio stream
+float samMsPerChar = 75;        // learned while speaking, keeps the words in sync
+
 // what the OLED face shows
 String screenText;              // reply / error text that scrolls on the OLED
 FaceMode faceOverride = FACE_IDLE;  // set by the app (/api/face) e.g. listening
@@ -156,25 +164,40 @@ String cleanForSpeech(const String &in) {
 }
 
 // SAM can only say ~250 chars per call, so split on sentence boundaries.
+// SAM speaks short phrases (better subtitle sync, and it can only say ~250
+// chars at once). Each phrase is timed so the subtitle highlight follows it.
 void sayWithSam(const String &text) {
-  const size_t MAXC = 180;
+  const size_t MAXC = 70;
   size_t start = 0;
   while (start < text.length() && !stopAudio) {
     size_t end = min(text.length(), start + MAXC);
     if (end < text.length()) {
       int cut = -1;
-      for (int i = end; i > (int)start + 20; i--) {
+      for (int i = end; i > (int)start + 12; i--) {
         char ch = text[i];
-        if (ch == '.' || ch == '!' || ch == '?' || ch == ',' || ch == ';') { cut = i + 1; break; }
+        if (ch == '.' || ch == '!' || ch == '?' || ch == ',' || ch == ';' || ch == ':') { cut = i + 1; break; }
       }
       if (cut < 0) for (int i = end; i > (int)start; i--) if (text[i] == ' ') { cut = i; break; }
       if (cut > 0) end = cut;
     }
     String part = text.substring(start, end);
+    int lead = 0;
+    while (lead < (int)part.length() && part[lead] == ' ') lead++;
     part.trim();
-    if (part.length()) sam->Say(dac, part.c_str());
+    if (part.length()) {
+      subChunkStart = start + lead;
+      subChunkLen = part.length();
+      subChunkMs = millis();
+      sam->Say(dac, part.c_str());
+      uint32_t took = millis() - subChunkMs;
+      if (took > 200 && !stopAudio) {                       // learn the real speed
+        float m = (float)took / part.length();
+        samMsPerChar = constrain(samMsPerChar * 0.6f + m * 0.4f, 30.f, 200.f);
+      }
+    }
     start = end;
   }
+  subChunkLen = 0;
   dac->stop();
 }
 
@@ -338,6 +361,15 @@ FaceInfo getFaceInfo() {
   f.mode = m;
   f.modeSinceMs = faceSince;
   strlcpy(f.text, screenText.c_str(), sizeof f.text);
+  if (m == FACE_SPEAKING && subText.length()) {
+    strlcpy(f.sub, subText.c_str(), sizeof f.sub);
+    if (subStreamPos >= 0) f.subPos = subStreamPos;
+    else if (subChunkLen > 0) {
+      int done = (int)((now - subChunkMs) / samMsPerChar);
+      f.subPos = subChunkStart + constrain(done, 0, subChunkLen - 1);
+    } else f.subPos = 0;
+    f.subPos = constrain(f.subPos, 0, (int)strlen(f.sub) - 1);
+  }
   UNLOCK();
   return f;
 }
@@ -592,7 +624,11 @@ void setup() {
 void speakNow(const String &raw) {
   String text = cleanForSpeech(raw);
   if (text.isEmpty()) return;
-  LOCK(); state = ST_SPEAKING; stopAudio = false; UNLOCK();
+  LOCK();
+  state = ST_SPEAKING; stopAudio = false;
+  subText = text.substring(0, 700);
+  subChunkLen = 0; subStreamPos = -1;
+  UNLOCK();
   ledSet(true);
   if (cfg.voiceMode == 1 && startPcTts(text)) return;   // continues in loop()
   sayWithSam(text);
@@ -603,6 +639,11 @@ void speakNow(const String &raw) {
 void loop() {
   // 1) keep a PC-TTS stream playing
   if (wav) {
+    uint32_t sz = wavSrc ? wavSrc->getSize() : 0;
+    if (sz > 44) {                                   // subtitle follows the audio stream
+      uint32_t pos = wavSrc->getPos();
+      subStreamPos = (int)((uint64_t)(pos > 44 ? pos - 44 : 0) * subText.length() / (sz - 44));
+    }
     if (stopAudio || !wav->isRunning() || !wav->loop()) {
       finishPcTts();
       ledSet(false);

@@ -176,10 +176,16 @@ void drawEye(int cx, int cy, float w, float h, uint16_t top, uint16_t bottom, bo
 
 enum Shape { NORMAL, HAPPY, SAD };
 
-void drawEyes(Shape shape, uint32_t now) {
-  const int baseW = 30, baseH = 38, cy = 54;
+float eyeScale = 1, eyeCy = 54;   // animated: eyes shrink and move up for subtitles
+
+void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
+  eyeScale = approach(eyeScale, scale, 0.2f);
+  eyeCy = approach(eyeCy, centerY, 0.2f);
+  const float baseW = 30 * eyeScale, baseH = 38 * eyeScale;
+  const int cy = (int)eyeCy;
   Eye *eyes[2] = {&eyeL, &eyeR};
-  const int cxs[2] = {38, 90};
+  const int gapX = (int)(26 * eyeScale);
+  const int cxs[2] = {64 - gapX, 64 + gapX};
 
   // blinking
   float blink = 1;
@@ -296,7 +302,7 @@ void thinkingExtras(uint32_t t) {
 }
 
 float mouthSmooth = 0;
-void speakingExtras(const FaceInfo &f, uint32_t now, uint32_t t) {
+void mouth(const FaceInfo &f, uint32_t now, int cy, float maxH) {
   mouthSmooth = approach(mouthSmooth, f.audioLevel / 255.f, 0.45f);
   float lvl = max(mouthSmooth, 0.12f);
   const int bars = 9, bw = 4, gap = 3;
@@ -304,10 +310,78 @@ void speakingExtras(const FaceInfo &f, uint32_t now, uint32_t t) {
   for (int i = 0; i < bars; i++) {
     float env = 1 - fabsf(i - (bars - 1) / 2.f) / ((bars + 1) / 2.f);   // taller in the middle
     float wob = 0.55f + 0.45f * sinf(now / 70.f + i * 1.3f);
-    int h = 2 + (int)(18 * lvl * env * wob);
-    cv->fillRoundRect(x0 + i * (bw + gap), 100 - h / 2, bw, h, 2, mix(TEAL, BLUE, (float)i / bars));
+    int h = 2 + (int)(maxH * lvl * env * wob);
+    cv->fillRoundRect(x0 + i * (bw + gap), cy - h / 2, bw, h, 2, mix(TEAL, BLUE, (float)i / bars));
   }
-  marquee(f.text, 119, WHITE, t);
+}
+
+// ------------------------------------------------------------ subtitles ----
+// Karaoke style: words already spoken are white, the word being spoken now is
+// highlighted, the next words are dim. Lines scroll up as the voice goes on.
+const int SUB_TOP = 74, SUB_LINE = 13, SUB_LINES = 4, SUB_CHARS = 20;
+float subScroll = 0;
+int lastLine = 0;
+
+struct Word { int16_t start, len, line, col; };
+
+void subtitles(const FaceInfo &f) {
+  static Word words[160];
+  int n = 0, line = 0, col = 0;
+  const char *s = f.sub;
+  int len = strlen(s);
+  // word wrap into lines of SUB_CHARS characters
+  for (int i = 0; i < len && n < 160;) {
+    while (i < len && s[i] == ' ') i++;
+    if (i >= len) break;
+    int st = i;
+    while (i < len && s[i] != ' ') i++;
+    int wl = min(i - st, SUB_CHARS);
+    if (col > 0 && col + 1 + wl > SUB_CHARS) { line++; col = 0; }
+    if (col > 0) col++;
+    words[n++] = {(int16_t)st, (int16_t)wl, (int16_t)line, (int16_t)col};
+    col += wl;
+  }
+  if (!n) return;
+
+  // which word is being spoken?
+  int cur = 0;
+  for (int k = 0; k < n; k++) if (words[k].start <= f.subPos) cur = k;
+  int target = max(0, words[cur].line - 1);           // keep the current line second from top
+  if (target + SUB_LINES > line + 1) target = max(0, line + 1 - SUB_LINES);
+  subScroll = approach(subScroll, target * SUB_LINE, 0.25f);
+
+  cv->setTextSize(1);
+  cv->setTextWrap(false);
+  for (int k = 0; k < n; k++) {
+    const Word &w = words[k];
+    int y = SUB_TOP + w.line * SUB_LINE - (int)subScroll;
+    if (y < SUB_TOP - 2 || y > SUB_TOP + (SUB_LINES - 1) * SUB_LINE + 2) continue;
+    int lineLen = 0;                                   // centre each line
+    for (int j = 0; j < n; j++) if (words[j].line == w.line) lineLen = words[j].col + words[j].len;
+    int x = (W - lineLen * 6) / 2 + w.col * 6;
+    uint16_t color;
+    if (k == cur) {
+      cv->fillRoundRect(x - 2, y - 2, w.len * 6 + 3, 11, 2, TEAL);
+      color = BLACK;
+    } else {
+      color = k < cur ? WHITE : DIM;
+    }
+    cv->setTextColor(color);
+    for (int c = 0; c < w.len; c++) {
+      cv->setCursor(x + c * 6, y);
+      cv->print(s[w.start + c]);
+    }
+  }
+}
+
+void speakingExtras(const FaceInfo &f, uint32_t now, uint32_t t) {
+  if (f.subPos >= 0 && f.sub[0]) {
+    mouth(f, now, 62, 9);
+    subtitles(f);
+  } else {
+    mouth(f, now, 100, 18);
+    marquee(f.text, 119, WHITE, t);
+  }
 }
 
 void sleepExtras(uint32_t now) {
@@ -377,7 +451,8 @@ void frame(uint32_t now) {
     case FACE_SPEAKING:
       statusBar(f);
       setEyes(1, 0, -2);
-      drawEyes(HAPPY, now);
+      if (f.subPos >= 0 && f.sub[0]) drawEyes(HAPPY, now, 0.62f, 34);   // small eyes, room for subtitles
+      else drawEyes(HAPPY, now);
       speakingExtras(f, now, t);
       break;
 
@@ -440,7 +515,7 @@ inline void oledBegin() {
     return;
   }
   randomSeed(esp_random());
-  xTaskCreatePinnedToCore(task, "oled", 6144, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(task, "oled", 8192, nullptr, 1, nullptr, 0);
   Serial.println("[oled] animated face running");
 }
 #endif
