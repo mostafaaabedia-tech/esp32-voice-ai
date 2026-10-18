@@ -212,7 +212,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 4.2 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 4.3 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -230,7 +230,8 @@ private fun StatusRows(vm: MainViewModel) {
         if (vm.deviceOnline && d != null) {
             add("ESP32 → Ollama" to if (d.ollamaOnline) "Online · ${d.ollamaHost}" else "Can't reach ${d.ollamaHost}")
             add("WiFi signal" to "${if (d.rssi > -60) "Strong" else if (d.rssi > -72) "Good" else "Weak"} (${d.rssi} dBm)")
-            add("Free memory" to "${d.heap / 1024} KB")
+            add("Free memory" to "${d.heap / 1024} KB (lowest ${d.minHeap / 1024} KB)")
+            if (d.lastReset.isNotBlank()) add("Last restart" to "Not OK · ${d.lastReset}")
             add("Uptime" to if (d.uptimeSec > 3600) "%.1f h".format(d.uptimeSec / 3600.0) else "${d.uptimeSec / 60} min")
             add("Firmware" to d.fw)
         }

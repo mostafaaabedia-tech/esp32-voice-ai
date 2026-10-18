@@ -25,5 +25,6 @@ struct FaceInfo {
   char text[160] = "";          // reply / error text for the scrolling line
   char sub[720] = "";           // subtitle: exactly what the speaker is saying
   int subPos = -1;              // index in sub[] being spoken right now (-1 = none)
-  char heard[200] = "";         // what you are saying (live from the phone mic)
+  char heard[200] = "";
+  char note[32] = "";           // e.g. "restarted: power dip" for the first minute         // what you are saying (live from the phone mic)
 };

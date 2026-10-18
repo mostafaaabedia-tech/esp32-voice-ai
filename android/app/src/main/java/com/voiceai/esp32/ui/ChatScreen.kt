@@ -3,7 +3,6 @@ package com.voiceai.esp32.ui
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Share
@@ -373,9 +372,7 @@ private fun AiMessage(vm: MainViewModel, m: Message, isLast: Boolean) {
     val copy: (String) -> Unit = { clip.setText(AnnotatedString(it)); vm.toast = "Copied" }
     Column(Modifier.fillMaxWidth()) {
         AiHeader(m.model ?: "AI", m.ts)
-        SelectionContainer {
-            MarkdownText(m.content, scale = vm.settings.textScale, onCopy = copy)
-        }
+        MarkdownText(m.content, scale = vm.settings.textScale, onCopy = copy)
         Row(
             Modifier.padding(top = 4.dp).fillMaxWidth().horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,

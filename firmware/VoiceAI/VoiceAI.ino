@@ -12,6 +12,7 @@
 //                  earlephilhower/ESP8266SAM
 // ============================================================================
 #include <WiFi.h>
+#include <esp_system.h>
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
@@ -29,8 +30,26 @@
 #include "dac_out.h"
 #include "oled.h"
 
-#define FW_VERSION "2.3.0"
+#define FW_VERSION "2.4.0"
 #define MAX_BODY_BYTES 16384
+
+// loop() runs the AI request and the voice; give it more stack than the 8 KB default
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
+/** Why did the ESP32 (re)start? Shown on the OLED and in the app. */
+const char *resetReasonText() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:  return "";
+    case ESP_RST_SW:       return "";
+    case ESP_RST_EXT:      return "";
+    case ESP_RST_BROWNOUT: return "power dip";
+    case ESP_RST_PANIC:    return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:      return "froze";
+    default:               return "";
+  }
+}
 
 // ---------------------------------------------------------------- settings --
 struct Settings {
@@ -164,19 +183,35 @@ String cleanForSpeech(const String &in) {
   return out;
 }
 
-// SAM can only say ~250 chars per call, so split on sentence boundaries.
-// SAM speaks short phrases (better subtitle sync, and it can only say ~250
-// chars at once). Each phrase is timed so the subtitle highlight follows it.
+/**
+ * SAM only knows letters, digits and simple punctuation. Any other character
+ * makes it fail AND leak ~4 KB of memory (a bug in the library) - after a few
+ * answers the ESP32 would run out of memory and restart. Replace them with
+ * spaces (same length, so the subtitle positions stay correct).
+ */
+String samSafe(const String &in) {
+  String out = in;
+  for (size_t i = 0; i < out.length(); i++) {
+    char c = out[i];
+    bool ok = isalnum((unsigned char)c) || c == ' ' || c == '.' || c == ',' || c == '?' ||
+              c == '!' || c == '\'' || c == ';' || c == ':' || c == '-';
+    if (!ok) out.setCharAt(i, ' ');
+  }
+  return out;
+}
+
+// SAM speaks short phrases of 3-5 words: long phrases can overflow its
+// internal buffers, and short ones keep the subtitle highlight in sync.
 void sayWithSam(const String &text) {
-  const size_t MAXC = 70;
+  const size_t MAXC = 32;
   size_t start = 0;
   while (start < text.length() && !stopAudio) {
     size_t end = min(text.length(), start + MAXC);
     if (end < text.length()) {
       int cut = -1;
-      for (int i = end; i > (int)start + 12; i--) {
-        char ch = text[i];
-        if (ch == '.' || ch == '!' || ch == '?' || ch == ',' || ch == ';' || ch == ':') { cut = i + 1; break; }
+      for (int i = end; i > (int)start + 8; i--) {        // prefer to stop at punctuation
+        char ch = text[i - 1];
+        if (ch == '.' || ch == '!' || ch == '?' || ch == ',' || ch == ';' || ch == ':') { cut = i; break; }
       }
       if (cut < 0) for (int i = end; i > (int)start; i--) if (text[i] == ' ') { cut = i; break; }
       if (cut > 0) end = cut;
@@ -185,13 +220,19 @@ void sayWithSam(const String &text) {
     int lead = 0;
     while (lead < (int)part.length() && part[lead] == ' ') lead++;
     part.trim();
-    if (part.length()) {
+    bool hasLetters = false;
+    for (size_t i = 0; i < part.length(); i++) if (isalnum((unsigned char)part[i])) { hasLetters = true; break; }
+    if (hasLetters) {
+      if (ESP.getFreeHeap() < 24000) {                     // never speak into an out-of-memory crash
+        Serial.printf("[sam] low memory (%u), skipping speech\n", ESP.getFreeHeap());
+        break;
+      }
       subChunkStart = start + lead;
       subChunkLen = part.length();
       subChunkMs = millis();
-      sam->Say(dac, part.c_str());
+      if (!sam->Say(dac, samSafe(part).c_str())) Serial.println("[sam] could not say: " + part);
       uint32_t took = millis() - subChunkMs;
-      if (took > 200 && !stopAudio) {                       // learn the real speed
+      if (took > 150 && !stopAudio) {                      // learn the real speed
         float m = (float)took / part.length();
         samMsPerChar = constrain(samMsPerChar * 0.6f + m * 0.4f, 30.f, 200.f);
       }
@@ -343,6 +384,7 @@ FaceInfo getFaceInfo() {
   f.rssi = f.wifiOk ? WiFi.RSSI() : 0;
   if (f.wifiOk) strlcpy(f.ip, WiFi.localIP().toString().c_str(), sizeof f.ip);
   f.audioLevel = dac ? dac->level() : 0;
+  if (now < 60000 && resetReasonText()[0]) snprintf(f.note, sizeof f.note, "restarted: %s", resetReasonText());
 
   FaceMode m;
   static JobState prevState = ST_IDLE;
@@ -455,6 +497,8 @@ void setupRoutes() {
     d["ip"] = WiFi.localIP().toString();
     d["rssi"] = WiFi.RSSI();
     d["heap"] = ESP.getFreeHeap();
+    d["min_heap"] = ESP.getMinFreeHeap();
+    d["reset"] = resetReasonText();
     d["uptime_s"] = millis() / 1000;
     d["state"] = stateName(state);
     d["ollama_online"] = ollamaOnline;
@@ -614,6 +658,7 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   Serial.println("\n=== VoiceAI " FW_VERSION " ===");
+  if (resetReasonText()[0]) Serial.printf("[boot] last restart was caused by: %s\n", resetReasonText());
   pinMode(STATUS_LED_PIN, OUTPUT);
   stateLock = xSemaphoreCreateMutex();
   bootMs = millis();

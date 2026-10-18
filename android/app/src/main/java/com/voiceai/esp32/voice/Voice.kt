@@ -25,7 +25,12 @@ class VoiceInput(private val context: Context) {
         onSpeechEnd: () -> Unit = {},
     ) {
         cancel()
-        val r = SpeechRecognizer.createSpeechRecognizer(context)
+        val r = try {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        } catch (e: Exception) {
+            onFail("Speech service could not start")
+            return
+        }
         recognizer = r
         r.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
@@ -68,7 +73,11 @@ class VoiceInput(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
         }
-        r.startListening(intent)
+        try {
+            r.startListening(intent)
+        } catch (e: Exception) {
+            onFail("Speech service could not start")
+        }
     }
 
     /** Stop listening and deliver what was heard (onFinal). */
@@ -76,12 +85,17 @@ class VoiceInput(private val context: Context) {
         recognizer?.stopListening()
     }
 
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Stop and free the recognizer. Destroying it inside one of its own callbacks
+     * crashes on some phones, so the destroy is done a moment later.
+     */
     fun cancel() {
-        recognizer?.let {
-            it.cancel()
-            it.destroy()
-        }
+        val r = recognizer ?: return
         recognizer = null
+        runCatching { r.cancel() }
+        main.post { runCatching { r.destroy() } }
     }
 }
 
@@ -92,16 +106,18 @@ class PhoneVoice(context: Context) {
 
     fun speak(text: String, lang: String): Boolean {
         if (!ready) return false
-        tts.language = Locale.forLanguageTag(lang)
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "voiceai")
-        return true
+        return runCatching {
+            tts.language = Locale.forLanguageTag(lang)
+            tts.speak(text.take(TextToSpeech.getMaxSpeechInputLength() - 1), TextToSpeech.QUEUE_FLUSH, null, "voiceai")
+            true
+        }.getOrDefault(false)
     }
 
     fun stop() {
         if (ready) tts.stop()
     }
 
-    val speaking: Boolean get() = ready && tts.isSpeaking
+    val speaking: Boolean get() = ready && runCatching { tts.isSpeaking }.getOrDefault(false)
 
     fun shutdown() = tts.shutdown()
 }

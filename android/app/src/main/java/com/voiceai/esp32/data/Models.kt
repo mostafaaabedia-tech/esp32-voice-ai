@@ -101,4 +101,6 @@ data class DeviceInfo(
     val sessionRequests: Int,
     val sessionPrompt: Long,
     val sessionCompletion: Long,
+    val minHeap: Long = 0,
+    val lastReset: String = "",
 )

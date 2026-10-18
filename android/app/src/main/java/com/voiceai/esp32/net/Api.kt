@@ -77,6 +77,8 @@ object Api {
             numCtx = c.optInt("num_ctx"),
             sessionRequests = s.optInt("requests"), sessionPrompt = s.optLong("prompt_tokens"),
             sessionCompletion = s.optLong("completion_tokens"),
+            minHeap = j.optLong("min_heap"),
+            lastReset = j.optString("reset"),
         )
     }
 

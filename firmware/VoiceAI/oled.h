@@ -414,6 +414,7 @@ void frame(uint32_t now) {
 
     case FACE_WIFI:
       wifiScreen(now);
+      if (f.note[0]) centerText(f.note, 119, AMBER);
       break;
 
     case FACE_IDLE: {
@@ -429,7 +430,7 @@ void frame(uint32_t now) {
         drawEyes(NORMAL, now);
       }
       if (!f.aiOnline) centerText("PC / Ollama offline", 104, AMBER);
-      centerText(f.ip, 119, DIM);
+      centerText(f.note[0] ? f.note : f.ip, 119, f.note[0] ? AMBER : DIM);
       break;
     }
 
@@ -478,11 +479,15 @@ void frame(uint32_t now) {
 }
 
 void task(void *) {
-  const TickType_t period = pdMS_TO_TICKS(OLED_TYPE == 2 ? 33 : 50);   // ~30 / 20 fps
-  TickType_t last = xTaskGetTickCount();
+  // SPI colour screen ~30 fps, I2C screens ~12 fps (one I2C frame takes ~45 ms).
+  const uint32_t period = OLED_TYPE == 2 ? 33 : 80;
   for (;;) {
-    frame(millis());
-    vTaskDelayUntil(&last, period);
+    uint32_t t0 = millis();
+    frame(t0);
+    uint32_t used = millis() - t0;
+    // always sleep a little, so the other tasks on this core (WiFi, web server,
+    // idle/watchdog) get time even if a frame was slow
+    vTaskDelay(pdMS_TO_TICKS(used + 10 < period ? period - used : 10));
   }
 }
 
@@ -501,7 +506,7 @@ inline void oledBegin() {
 
 #if OLED_TYPE == 1
   Wire.begin(OLED_SDA, OLED_SCL);
-  scr = new Adafruit_SSD1327(128, 128, &Wire, OLED_RST, 1000000, 400000);
+  scr = new Adafruit_SSD1327(128, 128, &Wire, OLED_RST, 400000, 400000);
   ok = scr->begin(OLED_I2C_ADDR) || scr->begin(OLED_I2C_ADDR == 0x3D ? 0x3C : 0x3D);
 #elif OLED_TYPE == 2
   SPI.begin(OLED_SCK, -1, OLED_MOSI, OLED_CS);
@@ -511,7 +516,7 @@ inline void oledBegin() {
 #elif OLED_TYPE == 3
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(400000);
-  scr = new Adafruit_SH1107(128, 128, &Wire, OLED_RST, 1000000, 400000);
+  scr = new Adafruit_SH1107(128, 128, &Wire, OLED_RST, 400000, 400000);   // SH1107 max is 400 kHz
   ok = scr->begin(OLED_I2C_ADDR) || scr->begin(OLED_I2C_ADDR == 0x3C ? 0x3D : 0x3C);
 #endif
   if (!ok) {
