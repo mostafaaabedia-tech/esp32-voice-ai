@@ -82,7 +82,10 @@ import com.voiceai.esp32.ui.VoiceAITheme
 import com.voiceai.esp32.ui.VoiceOverlay
 import com.voiceai.esp32.ui.fmt
 import com.voiceai.esp32.voice.VoiceInput
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.voiceai.esp32.data.Mode
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -116,28 +119,53 @@ private fun App(vm: MainViewModel) {
     var listening by remember { mutableStateOf(false) }
     var heard by remember { mutableStateOf("") }
     var level by remember { mutableFloatStateOf(0f) }
+    var processing by remember { mutableStateOf(false) }
+    var watchdog by remember { mutableStateOf<Job?>(null) }
 
     fun finish(send: Boolean, text: String) {
         if (!listening) return
         listening = false
+        processing = false
+        watchdog?.cancel()
         voice.cancel()
-        if (!send || text.isBlank()) vm.face("idle")
         val t = text.trim()
         if (send && t.isNotEmpty()) {
-            if (vm.settings.autoSend) vm.send(t) else vm.draft = t
+            if (vm.settings.autoSend) {
+                vm.send(t)
+                if (vm.settings.mode == Mode.ESP32) vm.face("thinking", t)   // ESP32 mode: face switches right away
+            } else {
+                vm.draft = t
+                vm.face("idle")
+            }
+        } else {
+            vm.face("idle")                                              // never leave the OLED on "listening"
+        }
+    }
+
+    /** If the speech service goes quiet, don't hang on "Listening…" forever. */
+    fun armWatchdog(ms: Long) {
+        watchdog?.cancel()
+        watchdog = scope.launch {
+            delay(ms)
+            if (!listening) return@launch
+            if (heard.isNotBlank()) finish(true, heard)
+            else { finish(false, ""); vm.toast = "Didn't hear anything. Tap the mic and try again." }
         }
     }
 
     fun startListening() {
         if (!voice.available) { vm.toast = "No speech service. Install or update the Google app."; return }
-        heard = ""; level = 0f; listening = true
+        heard = ""; level = 0f; processing = false; listening = true
         vm.face("listening")
+        armWatchdog(9000)                                                  // nobody spoke
         voice.start(
             vm.settings.lang,
-            onPartial = { heard = it },
+            onPartial = { heard = it; vm.faceHeard(it); if (!processing) armWatchdog(9000) },
             onLevel = { level = it },
             onFinal = { finish(true, it.ifBlank { heard }) },
             onFail = { msg -> if (heard.isNotBlank()) finish(true, heard) else { finish(false, ""); vm.toast = msg } },
+            onSpeechStart = { armWatchdog(15000) },                        // talking: allow a longer sentence
+            onSpeechEnd = { processing = true; armWatchdog(3500) },        // stopped talking: wait briefly for the result
         )
     }
 
@@ -177,7 +205,7 @@ private fun App(vm: MainViewModel) {
 
     if (listening) {
         VoiceOverlay(
-            text = heard, level = level,
+            text = heard.ifBlank { if (processing) "Processing…" else "" }, level = if (processing) 0f else level,
             onCancel = { finish(false, "") },
             onDone = { finish(true, heard) },
         )

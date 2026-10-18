@@ -324,10 +324,9 @@ int lastLine = 0;
 
 struct Word { int16_t start, len, line, col; };
 
-void subtitles(const FaceInfo &f) {
+void subtitles(const char *s, int pos) {
   static Word words[160];
   int n = 0, line = 0, col = 0;
-  const char *s = f.sub;
   int len = strlen(s);
   // word wrap into lines of SUB_CHARS characters
   for (int i = 0; i < len && n < 160;) {
@@ -345,7 +344,7 @@ void subtitles(const FaceInfo &f) {
 
   // which word is being spoken?
   int cur = 0;
-  for (int k = 0; k < n; k++) if (words[k].start <= f.subPos) cur = k;
+  for (int k = 0; k < n; k++) if (words[k].start <= pos) cur = k;
   int target = max(0, words[cur].line - 1);           // keep the current line second from top
   if (target + SUB_LINES > line + 1) target = max(0, line + 1 - SUB_LINES);
   subScroll = approach(subScroll, target * SUB_LINE, 0.25f);
@@ -377,7 +376,7 @@ void subtitles(const FaceInfo &f) {
 void speakingExtras(const FaceInfo &f, uint32_t now, uint32_t t) {
   if (f.subPos >= 0 && f.sub[0]) {
     mouth(f, now, 62, 9);
-    subtitles(f);
+    subtitles(f.sub, f.subPos);
   } else {
     mouth(f, now, 100, 18);
     marquee(f.text, 119, WHITE, t);
@@ -437,14 +436,26 @@ void frame(uint32_t now) {
     case FACE_LISTENING:
       statusBar(f);
       setEyes(1.15f, 0, -2);
-      drawEyes(NORMAL, now);
-      listeningExtras(t);
+      if (f.heard[0]) {
+        // you are talking: small eyes on top, your words appear live below
+        drawEyes(NORMAL, now, 0.62f, 34);
+        for (int k = 0; k < 2; k++) {
+          float p = fmodf(t / 700.f + k / 2.f, 1.f);
+          cv->drawCircle(64, 60, 3 + (int)(p * 7), mix(TEAL, BLACK, p));
+        }
+        cv->fillCircle(64, 60, 3, TEAL);
+        subtitles(f.heard, (int)strlen(f.heard) - 1);   // newest word highlighted
+      } else {
+        drawEyes(NORMAL, now);
+        listeningExtras(t);
+      }
       break;
 
     case FACE_THINKING:
       statusBar(f);
       setEyes(0.72f, 9, -8);                          // looking up and to the side
       drawEyes(NORMAL, now);
+      if (f.heard[0]) marquee(f.heard, 84, DIM, t);   // your question
       thinkingExtras(t);
       break;
 

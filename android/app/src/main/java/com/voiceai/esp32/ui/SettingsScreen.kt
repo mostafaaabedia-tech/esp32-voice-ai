@@ -212,7 +212,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 4.0 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 4.2 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )

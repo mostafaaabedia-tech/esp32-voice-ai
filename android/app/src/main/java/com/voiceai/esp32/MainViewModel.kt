@@ -263,7 +263,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 when (s.mode) {
                     Mode.DIRECT -> {
                         if (s.pcHost.isBlank()) throw IllegalStateException("Add your PC address in Settings")
-                        face("thinking")
+                        face("thinking", chat.messages.lastOrNull { it.role == "user" }?.content)
                         model = s.model
                         val msgs = JSONArray()
                         msgs.put(JSONObject().put("role", "system").put("content", systemPrompt(s)))
@@ -326,10 +326,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         delay(300)
     }
 
+    private var heardPending: String? = null
+    private var heardJob: Job? = null
+
+    /** Send what you are saying to the OLED while you talk (max ~4 times a second). */
+    fun faceHeard(text: String) {
+        val host = settings.espHost
+        if (host.isBlank()) return
+        heardPending = text
+        if (heardJob?.isActive == true) return
+        heardJob = viewModelScope.launch {
+            while (true) {
+                val t = heardPending ?: break
+                heardPending = null
+                Api.espFace(host, "listening", t)
+                delay(250)
+            }
+        }
+    }
+
     /** Make the ESP32's OLED face show listening / thinking / error / idle. */
     fun face(state: String, text: String? = null) {
         val host = settings.espHost
         if (host.isBlank()) return
+        heardPending = null
+        heardJob?.cancel()
         viewModelScope.launch { Api.espFace(host, state, text) }
     }
 

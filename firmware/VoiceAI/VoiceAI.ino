@@ -29,7 +29,7 @@
 #include "dac_out.h"
 #include "oled.h"
 
-#define FW_VERSION "2.2.0"
+#define FW_VERSION "2.3.0"
 #define MAX_BODY_BYTES 16384
 
 // ---------------------------------------------------------------- settings --
@@ -115,6 +115,7 @@ float samMsPerChar = 75;        // learned while speaking, keeps the words in sy
 
 // what the OLED face shows
 String screenText;              // reply / error text that scrolls on the OLED
+String heardText;               // your words, live from the phone while you talk
 FaceMode faceOverride = FACE_IDLE;  // set by the app (/api/face) e.g. listening
 uint32_t faceOverrideUntil = 0;
 FaceMode lastFaceMode = FACE_BOOT;
@@ -361,6 +362,7 @@ FaceInfo getFaceInfo() {
   f.mode = m;
   f.modeSinceMs = faceSince;
   strlcpy(f.text, screenText.c_str(), sizeof f.text);
+  if (m == FACE_LISTENING || m == FACE_THINKING) strlcpy(f.heard, heardText.c_str(), sizeof f.heard);
   if (m == FACE_SPEAKING && subText.length()) {
     strlcpy(f.sub, subText.c_str(), sizeof f.sub);
     if (subStreamPos >= 0) f.subPos = subStreamPos;
@@ -485,6 +487,11 @@ void setupRoutes() {
     LOCK();
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy, still thinking"); }
     stopAudio = true;                       // a new question interrupts speech
+    faceOverrideUntil = 0;                  // stop showing "listening"
+    {
+      JsonArray ms = peek["messages"].as<JsonArray>();
+      if (!ms.isNull() && ms.size()) heardText = asciiOnly(ms[ms.size() - 1]["content"] | "").substring(0, 190);
+    }
     pendingBody = body;
     pendingSpeak = peek["speak"] | true;
     uint32_t id = ++jobId;
@@ -530,11 +537,21 @@ void setupRoutes() {
     String st = in["state"] | "idle";
     LOCK();
     uint32_t now = millis();
-    if (st == "listening")      { faceOverride = FACE_LISTENING; faceOverrideUntil = now + 20000; }
-    else if (st == "thinking")  { faceOverride = FACE_THINKING;  faceOverrideUntil = now + 120000; }
-    else if (st == "error")     { faceOverride = FACE_ERROR;     faceOverrideUntil = now + 8000; }
-    else                        { faceOverrideUntil = 0; }
-    if (in["text"].is<const char *>()) screenText = asciiOnly(in["text"].as<String>()).substring(0, 150);
+    bool hasText = in["text"].is<const char *>();
+    String txt = hasText ? asciiOnly(in["text"].as<String>()) : String();
+    if (st == "listening") {
+      // the phone sends this again with every new word, so a short timeout is enough
+      faceOverride = FACE_LISTENING; faceOverrideUntil = now + 8000;
+      heardText = hasText ? txt.substring(txt.length() > 190 ? txt.length() - 190 : 0) : String();
+    } else if (st == "thinking") {
+      faceOverride = FACE_THINKING; faceOverrideUntil = now + 120000;
+      if (hasText) heardText = txt.substring(0, 190);
+    } else if (st == "error") {
+      faceOverride = FACE_ERROR; faceOverrideUntil = now + 8000;
+      if (hasText) screenText = txt.substring(0, 150);
+    } else {
+      faceOverrideUntil = 0;                       // idle: back to the normal face
+    }
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
@@ -626,6 +643,7 @@ void speakNow(const String &raw) {
   if (text.isEmpty()) return;
   LOCK();
   state = ST_SPEAKING; stopAudio = false;
+  faceOverrideUntil = 0;
   subText = text.substring(0, 700);
   subChunkLen = 0; subStreamPos = -1;
   UNLOCK();
@@ -674,12 +692,14 @@ void loop() {
       sessionRequests++;
       if (ok) {
         lastReply = reply; lastUsage = u; lastError = "";
+        faceOverrideUntil = 0;
         screenText = asciiOnly(reply).substring(0, 150);
         sessionPrompt += u.promptTokens;
         sessionCompletion += u.completionTokens;
         state = speak ? ST_SPEAKING : ST_IDLE;
       } else {
         lastError = err; lastReply = ""; lastUsage = Usage();
+        faceOverrideUntil = 0;
         screenText = asciiOnly(err).substring(0, 150);
         state = ST_ERROR;
       }
