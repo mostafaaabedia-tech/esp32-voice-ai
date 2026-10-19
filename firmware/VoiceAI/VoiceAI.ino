@@ -30,7 +30,7 @@
 #include "dac_out.h"
 #include "oled.h"
 
-#define FW_VERSION "2.4.0"
+#define FW_VERSION "2.5.0"
 #define MAX_BODY_BYTES 16384
 
 // loop() runs the AI request and the voice; give it more stack than the 8 KB default
@@ -230,15 +230,19 @@ void sayWithSam(const String &text) {
       subChunkStart = start + lead;
       subChunkLen = part.length();
       subChunkMs = millis();
+      // time limit for this phrase: if anything goes wrong it can't freeze the ESP32
+      dac->deadline = millis() + (uint32_t)(part.length() * samMsPerChar * 3) + 3000;
       if (!sam->Say(dac, samSafe(part).c_str())) Serial.println("[sam] could not say: " + part);
       uint32_t took = millis() - subChunkMs;
-      if (took > 150 && !stopAudio) {                      // learn the real speed
+      if (dac->drop) break;                                // stopped or DAC stalled
+      if (took > 150 && !stopAudio && took < dac->deadline - subChunkMs) {   // learn the real speed
         float m = (float)took / part.length();
         samMsPerChar = constrain(samMsPerChar * 0.6f + m * 0.4f, 30.f, 200.f);
       }
     }
     start = end;
   }
+  dac->deadline = 0;
   subChunkLen = 0;
   dac->stop();
 }
@@ -499,6 +503,7 @@ void setupRoutes() {
     d["heap"] = ESP.getFreeHeap();
     d["min_heap"] = ESP.getMinFreeHeap();
     d["reset"] = resetReasonText();
+    d["dac_stalls"] = dac ? (uint32_t)dac->stalls : 0;
     d["uptime_s"] = millis() / 1000;
     d["state"] = stateName(state);
     d["ollama_online"] = ollamaOnline;
@@ -530,7 +535,7 @@ void setupRoutes() {
     if (deserializeJson(peek, body)) return sendError(r, 400, "Invalid JSON");
     LOCK();
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy, still thinking"); }
-    stopAudio = true;                       // a new question interrupts speech
+    stopAudio = true; if (dac) dac->drop = true;                       // a new question interrupts speech
     faceOverrideUntil = 0;                  // stop showing "listening"
     {
       JsonArray ms = peek["messages"].as<JsonArray>();
@@ -566,7 +571,7 @@ void setupRoutes() {
     if (deserializeJson(in, bodyOf(r)) || !in["text"].is<const char *>()) return sendError(r, 400, "Need {text}");
     LOCK();
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy"); }
-    stopAudio = true;
+    stopAudio = true; if (dac) dac->drop = true;
     speakQueue = in["text"].as<String>();
     screenText = asciiOnly(speakQueue).substring(0, 150);
     faceOverrideUntil = 0;
@@ -602,7 +607,7 @@ void setupRoutes() {
 
   server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest *r) {
     LOCK();
-    stopAudio = true;
+    stopAudio = true; if (dac) dac->drop = true;
     speakQueue = "";
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
@@ -688,6 +693,7 @@ void speakNow(const String &raw) {
   if (text.isEmpty()) return;
   LOCK();
   state = ST_SPEAKING; stopAudio = false;
+  dac->drop = false; dac->deadline = 0;
   faceOverrideUntil = 0;
   subText = text.substring(0, 700);
   subChunkLen = 0; subStreamPos = -1;
@@ -707,7 +713,7 @@ void loop() {
       uint32_t pos = wavSrc->getPos();
       subStreamPos = (int)((uint64_t)(pos > 44 ? pos - 44 : 0) * subText.length() / (sz - 44));
     }
-    if (stopAudio || !wav->isRunning() || !wav->loop()) {
+    if (stopAudio || dac->drop || !wav->isRunning() || !wav->loop()) {
       finishPcTts();
       ledSet(false);
       LOCK(); if (state == ST_SPEAKING) state = ST_IDLE; UNLOCK();

@@ -6,6 +6,16 @@
 //  AudioOutputI2S(0, INTERNAL_DAC) constructor silently ignores the DAC mode
 //  (no sound), and AudioOutputInternalDAC ignores SetGain() and can play SAM
 //  at the wrong speed. This small class fixes all three.
+//
+//  NEVER-HANG RULES (v2.5):
+//   * writes to the DAC time out after 250 ms instead of waiting forever. If the
+//     DAC stops taking data, the rest of the sentence is dropped and the DAC is
+//     restarted for the next one. (Before, one stall froze the whole ESP32 on
+//     "speaking" - the frozen subtitle bug.)
+//   * ConsumeSample() always returns true. The voice library loops forever if
+//     it returns false.
+//   * drop / deadline: the firmware can cut speech off instantly (Stop button,
+//     new question) and every phrase has a time limit.
 // ============================================================================
 #pragma once
 #include <AudioOutput.h>
@@ -18,7 +28,8 @@ class DacOutput : public AudioOutput {
   uint8_t buf[BUF];
   size_t fill = 0;
   uint16_t peak = 0;
-  volatile uint8_t lvl = 0;     // loudness for the OLED mouth
+  volatile uint8_t lvl = 0;      // loudness for the OLED mouth
+  bool needReopen = false;
 
   void open() {
     close();
@@ -33,9 +44,11 @@ class DacOutput : public AudioOutput {
     if (dac_continuous_new_channels(&c, &handle) == ESP_OK && dac_continuous_enable(handle) == ESP_OK) {
       openRate = c.freq_hz;
     } else {
-      handle = nullptr;
+      Serial.println("[dac] could not start the DAC");
+      if (handle) { dac_continuous_del_channels(handle); handle = nullptr; }
       openRate = 0;
     }
+    needReopen = false;
   }
 
   void close() {
@@ -46,7 +59,27 @@ class DacOutput : public AudioOutput {
     }
   }
 
+  /** Send bytes to the DAC; never blocks for more than 250 ms. */
+  void writeOut(uint8_t *data, size_t n) {
+    if (!handle || n == 0) return;
+    esp_err_t e = dac_continuous_write(handle, data, n, NULL, 250);
+    if (e != ESP_OK) {
+      stalls++;
+      Serial.printf("[dac] stalled (err %d) - dropping this sentence, DAC restarts next time\n", e);
+      drop = true;            // let the voice finish instantly (no more writes)
+      needReopen = true;      // fresh DAC for the next sentence
+    }
+  }
+
+  bool dropping() const {
+    return drop || (deadline && (int32_t)(millis() - deadline) > 0);
+  }
+
 public:
+  volatile bool drop = false;     // true = throw samples away (stop speaking now)
+  volatile uint32_t deadline = 0; // millis() after which samples are thrown away (0 = none)
+  volatile uint32_t stalls = 0;   // how many times the DAC stopped responding
+
   DacOutput() { hertz = 22050; channels = 1; SetGain(1.0f); }
   ~DacOutput() override { close(); }
 
@@ -54,12 +87,14 @@ public:
   bool SetChannels(int ch) override { channels = ch; return true; }
 
   bool begin() override {
-    if (!handle || openRate != hertz) open();
+    if (!handle || openRate != hertz || needReopen) open();
     return handle != nullptr;
   }
 
   bool ConsumeSample(int16_t s[2]) override {
-    if (!handle || openRate != hertz) open();
+    if (dropping()) { lvl = 0; fill = 0; return true; }   // must stay true, see top
+    if (!handle || openRate != hertz || needReopen) open();
+    if (!handle) return true;
     int32_t v = channels == 2 ? ((int32_t)s[0] + s[1]) / 2 : s[0];
     v = Amplify((int16_t)v);
     uint16_t a = v < 0 ? -v : v;
@@ -70,7 +105,7 @@ public:
   }
 
   void flush() override {
-    if (handle && fill) dac_continuous_write(handle, buf, fill, NULL, -1);
+    if (fill && !dropping()) writeOut(buf, fill);
     fill = 0;
     lvl = (uint8_t)min<uint32_t>(255, peak >> 6);   // ~ 0..255
     peak = 0;
@@ -84,10 +119,11 @@ public:
   bool stop() override {
     flush();
     lvl = 0;
-    if (handle) {
+    if (handle && !needReopen) {
       memset(buf, 128, BUF);
-      dac_continuous_write(handle, buf, BUF, NULL, -1);
+      writeOut(buf, BUF);
     }
+    fill = 0;
     return true;
   }
 };
