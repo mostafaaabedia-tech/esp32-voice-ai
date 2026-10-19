@@ -30,7 +30,7 @@
 #include "dac_out.h"
 #include "oled.h"
 
-#define FW_VERSION "2.5.0"
+#define FW_VERSION "2.6.0"
 #define MAX_BODY_BYTES 16384
 
 // loop() runs the AI request and the voice; give it more stack than the 8 KB default
@@ -413,7 +413,9 @@ FaceInfo getFaceInfo() {
     strlcpy(f.sub, subText.c_str(), sizeof f.sub);
     if (subStreamPos >= 0) f.subPos = subStreamPos;
     else if (subChunkLen > 0) {
-      int done = (int)((now - subChunkMs) / samMsPerChar);
+      // the sound comes out ~0.3 s after it is made (audio buffers), so lag the highlight too
+      int32_t ms = (int32_t)(now - subChunkMs) - 300;
+      int done = ms > 0 ? (int)(ms / samMsPerChar) : 0;
       f.subPos = subChunkStart + constrain(done, 0, subChunkLen - 1);
     } else f.subPos = 0;
     f.subPos = constrain(f.subPos, 0, (int)strlen(f.sub) - 1);
