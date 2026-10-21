@@ -159,26 +159,7 @@ fun CompanionScreen(
                     listening -> heard
                     else -> c.bubble
                 }
-                AnimatedVisibility(
-                    visible = text.isNotBlank(), enter = fadeIn(), exit = fadeOut(),
-                    modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 18.dp, vertical = 6.dp),
-                ) {
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(if (listening) Color(0xEE1D2A4A) else Color(0xF2FFFFFF))
-                            .border(1.5.dp, if (listening) Lavender else Pink.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
-                            .heightIn(max = 150.dp)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                    ) {
-                        Text(
-                            if (listening) "“$text”" else text,
-                            color = if (listening) Color.White else Color(0xFF2A1E3D),
-                            fontSize = (16 * s.textScale).sp, lineHeight = (22 * s.textScale).sp,
-                        )
-                    }
-                }
+                Bubble(text, listening, s.textScale, Modifier.align(Alignment.TopCenter).padding(horizontal = 18.dp, vertical = 6.dp))
 
                 // little chips: sensors and her decisions
                 Column(
@@ -271,6 +252,27 @@ fun CompanionScreen(
             },
             confirmButton = { TextButton(onClick = { showLog = false }) { Text("Close") } },
         )
+    }
+}
+
+@Composable
+private fun Bubble(text: String, listening: Boolean, scale: Float, modifier: Modifier) {
+    AnimatedVisibility(visible = text.isNotBlank(), enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(if (listening) Color(0xEE1D2A4A) else Color(0xF2FFFFFF))
+                .border(1.5.dp, if (listening) Lavender else Pink.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                .heightIn(max = 150.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            Text(
+                if (listening) "“$text”" else text,
+                color = if (listening) Color.White else Color(0xFF2A1E3D),
+                fontSize = (16 * scale).sp, lineHeight = (22 * scale).sp,
+            )
+        }
     }
 }
 
