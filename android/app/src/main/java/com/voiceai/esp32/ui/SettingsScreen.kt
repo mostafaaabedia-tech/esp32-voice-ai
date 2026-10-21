@@ -55,6 +55,12 @@ import com.voiceai.esp32.MainViewModel
 import com.voiceai.esp32.data.Mode
 import com.voiceai.esp32.data.Persona
 import com.voiceai.esp32.data.Route
+import com.voiceai.esp32.data.Personality
+import com.voiceai.esp32.data.Chattiness
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.TextButton
 import kotlinx.coroutines.launch
 
 @Composable
@@ -98,6 +104,10 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         SheetHeader("Settings", { saveLocal(); onBack() })
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp)) {
+
+            // -------------------------------------------------- companion
+            SectionTitle("Your AI companion")
+            AppCard { CompanionSettings(vm) }
 
             // -------------------------------------------------- connection
             SectionTitle("How to reach the AI")
@@ -205,7 +215,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 5.0 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 6.0 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -246,6 +256,108 @@ private fun StatusRows(vm: MainViewModel) {
                     },
                 )
             }
+        }
+    }
+}
+
+private val HAIR = listOf("#8e74e6", "#f28cb1", "#7b5642", "#2e2c3e", "#e9e4f2", "#f0c46a", "#e0634f", "#5d8de0")
+private val EYES = listOf("#d9577f", "#7a5cff", "#3f8fd8", "#3fae74", "#c8862f", "#b23a48")
+
+/** Name, personality, looks, voice and memories of the companion. */
+@Composable
+private fun CompanionSettings(vm: MainViewModel) {
+    val s = vm.settings
+    val c = vm.companion
+    var name by remember { mutableStateOf(s.companionName) }
+    var you by remember { mutableStateOf(s.userName) }
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(Modifier.weight(1f)) { Field("Her name", name, "Nova") { name = it; vm.updateSettings(vm.settings.copy(companionName = it.take(20))) } }
+        Box(Modifier.weight(1f)) { Field("Your name", you, "so she can call you") { you = it; vm.updateSettings(vm.settings.copy(userName = it.take(20))) } }
+    }
+    Label("Personality")
+    Segmented(Personality.entries, s.personality, { it.label }) { vm.updateSettings(vm.settings.copy(personality = it)) }
+    Spacer(Modifier.height(12.dp))
+    Label("Starts talking by herself")
+    Segmented(Chattiness.entries, s.chattiness, { it.label }) { vm.updateSettings(vm.settings.copy(chattiness = it)) }
+    Text(
+        "Every few minutes she decides by herself whether to say something: ask about your day, share a fun fact, remind you to rest… or stay quiet. " +
+            "She also reacts when you pet her (IR sensor or touching her head), poke her cheek, or walk up to the ESP32.",
+        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp),
+    )
+    Spacer(Modifier.height(12.dp))
+    Label("Hair")
+    ColorRow(HAIR, s.hairColor) { vm.updateSettings(vm.settings.copy(hairColor = it)) }
+    Spacer(Modifier.height(8.dp))
+    Label("Eyes")
+    ColorRow(EYES, s.eyeColor) { vm.updateSettings(vm.settings.copy(eyeColor = it)) }
+
+    Spacer(Modifier.height(14.dp))
+    Label("Voice pitch  ${"%.2f".format(s.voicePitch)}")
+    Slider(value = s.voicePitch, onValueChange = { vm.updateSettings(vm.settings.copy(voicePitch = (it * 20).toInt() / 20f)) }, valueRange = 0.6f..1.8f)
+    Label("Voice speed  ${"%.2f".format(s.voiceRate)}")
+    Slider(value = s.voiceRate, onValueChange = { vm.updateSettings(vm.settings.copy(voiceRate = (it * 20).toInt() / 20f)) }, valueRange = 0.6f..1.6f)
+    val voices = remember(s.lang) { vm.phoneVoice.voices(s.lang) }
+    if (voices.isNotEmpty()) {
+        var open by remember { mutableStateOf(false) }
+        Label("Voice")
+        Box {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.background)
+                    .clickable { open = true }.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(s.voiceName.ifBlank { "Default voice" }, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(Icons.Outlined.KeyboardArrowDown, null)
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                DropdownMenuItem(text = { Text("Default voice") }, onClick = { vm.updateSettings(vm.settings.copy(voiceName = "")); open = false })
+                voices.forEach { v ->
+                    DropdownMenuItem(text = { Text(v, fontSize = 13.sp) }, onClick = { vm.updateSettings(vm.settings.copy(voiceName = v)); open = false })
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = { vm.speakOnPhone("Hi! I'm ${vm.settings.companionName}. Do you like how I sound?") },
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface),
+    ) { Text("Test her voice") }
+
+    Spacer(Modifier.height(14.dp))
+    Label("What ${s.companionName} remembers about you")
+    if (c.memories.isEmpty()) Text(
+        "Nothing yet. Tell her about yourself (your name, what you like) and she will remember it.",
+        fontSize = 13.sp, color = MaterialTheme.colorScheme.outline,
+    )
+    c.memories.toList().forEach { m ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("• $m", fontSize = 13.sp, modifier = Modifier.weight(1f))
+            Text("forget", fontSize = 12.sp, color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { c.forget(m) }.padding(6.dp))
+        }
+    }
+    if (c.memories.isNotEmpty() || c.talk.isNotEmpty()) {
+        TextButton(onClick = { c.forgetAll(); vm.toast = "${s.companionName} forgot everything" }) {
+            Text("Forget everything", color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun ColorRow(colors: List<String>, selected: String, onPick: (String) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        colors.forEach { hex ->
+            val col = Color(android.graphics.Color.parseColor(hex))
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(col)
+                    .border(if (hex.equals(selected, true)) 3.dp else 1.dp,
+                        if (hex.equals(selected, true)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                    .clickable { onPick(hex) },
+            )
         }
     }
 }

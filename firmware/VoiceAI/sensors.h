@@ -18,6 +18,31 @@ namespace sense {
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
 SenseInfo info;                     // guarded by mux, copied out with get()
 
+// Things that happened, so the phone app can react (the AI companion talks
+// when you pet it or walk up). Read with /api/sense?since=<seq>.
+enum EventType : uint8_t { EV_NONE, EV_PET, EV_PET_END, EV_ARRIVE, EV_LEAVE, EV_TOO_CLOSE };
+struct SenseEvent { uint32_t seq, ms; EventType type; };
+const int EVQ = 16;
+SenseEvent evq[EVQ];
+uint32_t evSeq = 0;
+
+// call with mux held
+void pushEvent(EventType t, uint32_t now) {
+  evSeq++;
+  evq[evSeq % EVQ] = {evSeq, now, t};
+}
+
+const char *eventName(EventType t) {
+  switch (t) {
+    case EV_PET: return "pet";
+    case EV_PET_END: return "pet_end";
+    case EV_ARRIVE: return "arrive";
+    case EV_LEAVE: return "leave";
+    case EV_TOO_CLOSE: return "too_close";
+    default: return "none";
+  }
+}
+
 struct Echo {
   int trig = -1, pin = -1;
   volatile uint32_t rise = 0, width = 0;
@@ -83,9 +108,11 @@ void pollIr(uint32_t now) {
     info.pets++;
     info.love = min(100, info.love + 8);
     lastLove = now;
+    pushEvent(EV_PET, now);
   } else if (!on && was) {
     info.petting = false;
     info.lastPetMs = now;
+    pushEvent(EV_PET_END, now);
   }
   if (info.petting && now - lastLove > 700) {        // holding your hand there = more love
     lastLove = now;
@@ -139,6 +166,7 @@ int filtered(Echo &e, int raw) {
 void task(void *) {
   int nearCount = 0;
   uint32_t farSince = 0;
+  bool closeArmed = true;
   float lx = 0;
   info.absentSinceMs = millis();
   for (;;) {
@@ -180,7 +208,10 @@ void task(void *) {
         info.present = true;
         info.presentSinceMs = now;
         info.awayBeforeMs = info.absentSinceMs ? now - info.absentSinceMs : 600000;
-        if (info.awayBeforeMs > 4000) info.arrivedMs = now;   // say hi only after a real absence
+        if (info.awayBeforeMs > 4000) {               // say hi only after a real absence
+          info.arrivedMs = now;
+          pushEvent(EV_ARRIVE, now);
+        }
         arrived = true;
       }
     } else {
@@ -190,12 +221,27 @@ void task(void *) {
         info.present = false;
         info.absentSinceMs = now;
         left = true;
+        pushEvent(EV_LEAVE, now);
       }
     }
+    if (info.present && d > 0 && d < TOO_CLOSE_CM && closeArmed) { closeArmed = false; pushEvent(EV_TOO_CLOSE, now); }
+    if (d < 0 || d > TOO_CLOSE_CM + 6) closeArmed = true;
     portEXIT_CRITICAL(&mux);
     if (arrived) Serial.printf("[sense] person at %d cm\n", d);
     if (left) Serial.println("[sense] person left");
   }
+}
+
+/** Events newer than `since` (oldest first). Returns how many were copied. */
+int eventsSince(uint32_t since, SenseEvent *out, int max, uint32_t &seqNow) {
+  portENTER_CRITICAL(&mux);
+  seqNow = evSeq;
+  uint32_t from = since + 1;
+  if (evSeq >= EVQ && from < evSeq - EVQ + 1) from = evSeq - EVQ + 1;
+  int n = 0;
+  for (uint32_t s = from; s <= evSeq && n < max; s++) out[n++] = evq[s % EVQ];
+  portEXIT_CRITICAL(&mux);
+  return n;
 }
 
 /** Copy of the latest sensor values (safe from any task). */

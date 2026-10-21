@@ -13,7 +13,8 @@ struct Usage {
 enum JobState { ST_IDLE, ST_THINKING, ST_SPEAKING, ST_ERROR };
 
 // What the OLED face should show (filled by getFaceInfo() in VoiceAI.ino)
-enum FaceMode { FACE_BOOT, FACE_WIFI, FACE_IDLE, FACE_LISTENING, FACE_THINKING, FACE_SPEAKING, FACE_ERROR };
+// FACE_EMOTION = the AI in the phone app chose a feeling to show (happy, love, angry...)
+enum FaceMode { FACE_BOOT, FACE_WIFI, FACE_IDLE, FACE_LISTENING, FACE_THINKING, FACE_SPEAKING, FACE_ERROR, FACE_EMOTION };
 
 // What the ultrasonic + IR sensors see (sensors.h)
 struct SenseInfo {
@@ -47,5 +48,6 @@ struct FaceInfo {
   int subPos = -1;              // index in sub[] being read right now (-1 = none)
   char heard[200] = "";         // what you are saying (live from the phone mic)
   char note[32] = "";           // e.g. "restarted: power dip" for the first minute
+  char emotion[12] = "";        // AI feeling: happy love shy excited surprised sad angry sleepy thinking wink
   SenseInfo s;                  // sensors
 };

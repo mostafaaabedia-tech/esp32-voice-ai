@@ -75,6 +75,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.voiceai.esp32.ui.ChatScreen
+import com.voiceai.esp32.ui.CompanionScreen
+import androidx.compose.material.icons.outlined.Face
 import com.voiceai.esp32.ui.BrandHeader
 import com.voiceai.esp32.ui.SettingsScreen
 import com.voiceai.esp32.ui.UsageScreen
@@ -129,6 +131,10 @@ private fun App(vm: MainViewModel) {
         watchdog?.cancel()
         voice.cancel()
         val t = text.trim()
+        if (vm.screen == Screen.COMPANION) {                             // talking to the companion
+            if (send && t.isNotEmpty()) vm.companion.userSaid(t) else vm.face("idle")
+            return
+        }
         if (send && t.isNotEmpty()) {
             if (vm.settings.autoSend) {
                 vm.send(t)
@@ -156,6 +162,7 @@ private fun App(vm: MainViewModel) {
     fun startListening() {
         if (!voice.available) { vm.toast = "No speech service. Install or update the Google app."; return }
         heard = ""; level = 0f; processing = false; listening = true
+        vm.phoneVoice.stop()                                               // she stops talking when you start
         vm.face("listening")
         armWatchdog(9000)                                                  // nobody spoke
         voice.start(
@@ -177,16 +184,22 @@ private fun App(vm: MainViewModel) {
         else askMic.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    // the companion's face shows when you are talking
+    LaunchedEffect(listening) { vm.companion.setListening(listening) }
+    // remember which main screen to go back to
+    LaunchedEffect(vm.screen) { if (vm.screen == Screen.CHAT || vm.screen == Screen.COMPANION) vm.home = vm.screen }
+
     // hands-free: listen again after the answer has been spoken
     LaunchedEffect(vm.listenRequest) {
-        if (vm.listenRequest > 0 && !listening && vm.settings.handsFree &&
+        if (vm.listenRequest > 0 && !listening && (vm.settings.handsFree || vm.screen == Screen.COMPANION) &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         ) startListening()
     }
 
     // ------------------------------------------------------------------ back
     BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
-    BackHandler(enabled = !drawer.isOpen && vm.screen != Screen.CHAT) { vm.screen = Screen.CHAT }
+    BackHandler(enabled = !drawer.isOpen && (vm.screen == Screen.USAGE || vm.screen == Screen.SETTINGS)) { vm.screen = vm.home }
+    BackHandler(enabled = !drawer.isOpen && vm.screen == Screen.CHAT) { vm.screen = Screen.COMPANION }
 
     ModalNavigationDrawer(
         drawerState = drawer,
@@ -197,13 +210,18 @@ private fun App(vm: MainViewModel) {
         },
     ) {
         when (vm.screen) {
+            Screen.COMPANION -> CompanionScreen(
+                vm, listening, heard, if (processing) 0f else level,
+                onMenu = { scope.launch { drawer.open() } }, onMic = onMic,
+                onStopMic = { if (heard.isNotBlank()) finish(true, heard) else finish(false, "") },
+            )
             Screen.CHAT -> ChatScreen(vm, onMenu = { scope.launch { drawer.open() } }, onMic = onMic)
-            Screen.USAGE -> UsageScreen(vm) { vm.screen = Screen.CHAT }
-            Screen.SETTINGS -> SettingsScreen(vm) { vm.screen = Screen.CHAT }
+            Screen.USAGE -> UsageScreen(vm) { vm.screen = vm.home }
+            Screen.SETTINGS -> SettingsScreen(vm) { vm.screen = vm.home }
         }
     }
 
-    if (listening) {
+    if (listening && vm.screen != Screen.COMPANION) {
         VoiceOverlay(
             text = heard.ifBlank { if (processing) "Processing…" else "" }, level = if (processing) 0f else level,
             onCancel = { finish(false, "") },
@@ -229,7 +247,7 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(Brush.linearGradient(BrandGradient))
-                .clickable { vm.newChat(); close() }
+                .clickable { vm.newChat(); vm.screen = Screen.CHAT; close() }
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -237,6 +255,7 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
             Spacer(Modifier.width(10.dp))
             Text("New chat", color = Color.White, fontWeight = FontWeight.SemiBold)
         }
+        DrawerLink(Icons.Outlined.Face, "Talk with ${vm.settings.companionName}") { vm.screen = Screen.COMPANION; close() }
         // search
         Row(
             Modifier
@@ -275,7 +294,7 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
                         .background(if (c.id == vm.currentId) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface)
-                        .clickable { vm.openChat(c.id); close() }
+                        .clickable { vm.openChat(c.id); vm.screen = Screen.CHAT; close() }
                         .padding(start = 10.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

@@ -16,6 +16,8 @@ import kotlin.coroutines.coroutineContext
 
 class ApiException(message: String) : Exception(message)
 
+data class SenseResult(val seq: Long, val sensors: Sensors, val lookX: Float, val events: List<String>)
+
 /** Plain HttpURLConnection client: no extra libraries needed. */
 object Api {
     @Volatile private var streamConn: HttpURLConnection? = null
@@ -98,10 +100,12 @@ object Api {
         if (code != 200) throw ApiException(errorOf(text, code))
     }
 
-    /** Show text on the OLED, word by word like subtitles. */
-    suspend fun espShow(host: String, text: String) {
+    /** Show text on the OLED, word by word like subtitles (optionally with a feeling for the eyes). */
+    suspend fun espShow(host: String, text: String, emotion: String? = null) {
+        val req = JSONObject().put("text", text)
+        if (emotion != null) req.put("emotion", emotion)
         val (code, body) = try {
-            request("POST", base(host) + "/api/speak", JSONObject().put("text", text))
+            request("POST", base(host) + "/api/speak", req)
         } catch (e: IOException) {
             throw ApiException("ESP32 not reachable at $host")
         }
@@ -119,6 +123,35 @@ object Api {
         val body = JSONObject().put("state", state)
         if (text != null) body.put("text", text)
         runCatching { request("POST", base(host) + "/api/face", body, 2500) }
+    }
+
+    /** The companion decided how she feels: show it on the OLED for [ms]. */
+    suspend fun espEmotion(host: String, emotion: String, ms: Int = 4000) {
+        runCatching { request("POST", base(host) + "/api/face", JSONObject().put("state", "emotion").put("emotion", emotion).put("ms", ms), 2000) }
+    }
+
+    /** Sensors + events (pet, arrive, leave, too_close) newer than [since]. Null = old firmware without /api/sense. */
+    suspend fun espSense(host: String, since: Long): SenseResult? {
+        val (code, text) = try {
+            request("GET", base(host) + "/api/sense?since=$since", timeoutMs = 2500)
+        } catch (e: IOException) {
+            throw ApiException("Can't reach the ESP32 at $host")
+        }
+        if (code == 404) return null
+        if (code != 200) throw ApiException(errorOf(text, code))
+        val j = JSONObject(text)
+        val ev = j.optJSONArray("events") ?: JSONArray()
+        return SenseResult(
+            seq = j.optLong("seq"),
+            sensors = Sensors(
+                ultrasonic = j.optBoolean("ultrasonic"), twoSensors = j.optBoolean("two_sensors"),
+                distanceCm = j.optInt("distance_cm", -1), person = j.optBoolean("person"),
+                ir = j.optBoolean("ir"), petting = j.optBoolean("petting"),
+                pets = j.optInt("pets"), love = j.optInt("love"),
+            ),
+            lookX = j.optDouble("look_x", 0.0).toFloat(),
+            events = (0 until ev.length()).map { ev.getJSONObject(it).optString("type") },
+        )
     }
 
     suspend fun espStop(host: String) {

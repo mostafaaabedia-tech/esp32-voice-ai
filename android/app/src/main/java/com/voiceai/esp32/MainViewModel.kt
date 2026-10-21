@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.voiceai.esp32.companion.Companion
 import com.voiceai.esp32.data.AppSettings
 import com.voiceai.esp32.data.Chat
 import com.voiceai.esp32.data.DeviceInfo
@@ -30,7 +31,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-enum class Screen { CHAT, USAGE, SETTINGS }
+enum class Screen { COMPANION, CHAT, USAGE, SETTINGS }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
@@ -42,7 +43,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     var currentId by mutableStateOf(store.currentChatId); private set
     val usage = mutableStateListOf<UsageRecord>().apply { addAll(store.loadUsage()) }
 
-    var screen by mutableStateOf(Screen.CHAT)
+    var screen by mutableStateOf(Screen.COMPANION)
+    /** The main screen to go back to from Settings / Usage. */
+    var home by mutableStateOf(Screen.COMPANION)
     var busy by mutableStateOf(false); private set
     var liveText by mutableStateOf(""); private set          // answer while it streams
     var startedAt by mutableStateOf(0L); private set
@@ -91,7 +94,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val host = settings.espHost
             if (syncSubs && host.isNotBlank()) viewModelScope.launch(Dispatchers.IO) { Api.espSubPos(host, 0, 0, done = true) }
             syncSubs = false
+            companion.voiceDone()
         }
+        phoneVoice.onStart = { if (screen == Screen.COMPANION) companion.voiceStart() }
+        phoneVoice.onWord = { companion.voiceWord() }
+        applyVoice()
         viewModelScope.launch {
             while (isActive) {
                 if (!busy) refreshStatus()
@@ -105,6 +112,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSettings(s: AppSettings) {
         settings = s
         store.saveSettings(s)
+        applyVoice()
+        companion.pushState()
+    }
+
+    private fun applyVoice() {
+        phoneVoice.pitch = settings.voicePitch
+        phoneVoice.rate = settings.voiceRate
+        phoneVoice.voiceName = settings.voiceName
+    }
+
+    /** The AI companion that lives in the app and the ESP32. */
+    val companion = Companion(this, store)
+
+    fun requestListen() { listenRequest++ }
+
+    fun recordUsage(model: String, u: Usage, chatId: String) {
+        usage.add(UsageRecord(System.currentTimeMillis(), chatId, model, u.prompt, u.completion, u.tokensPerSec, u.totalMs))
+        val copy = usage.toList()
+        viewModelScope.launch(Dispatchers.IO) { store.saveUsage(copy) }
+    }
+
+    /** Read a reply out loud on the phone and show it (with a feeling) on the ESP32 screen. */
+    fun speakAnswer(text: String, emotion: String? = null) {
+        val s = settings
+        val spoken = plain(text)
+        if (s.espHost.isNotBlank()) viewModelScope.launch { runCatching { Api.espShow(s.espHost, spoken, emotion) } }
+        syncSubs = s.route.onPhone && s.espHost.isNotBlank()
+        if (s.route.onPhone) phoneVoice.speak(spoken, s.lang)
     }
 
     /** Saves AI settings on the ESP32 too, so both modes behave the same. */

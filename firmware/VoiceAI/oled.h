@@ -291,7 +291,7 @@ void drawEye(int cx, int cy, float w, float h, uint16_t top, uint16_t bottom, bo
   if (shine && ih > 14) cv->fillCircle(x + iw - 8, y + 7, 3, OLED_TYPE == 3 ? BLACK : WHITE);
 }
 
-enum Shape { NORMAL, HAPPY, SAD, HEART, SQUEEZE, BLISS };
+enum Shape { NORMAL, HAPPY, SAD, HEART, SQUEEZE, BLISS, ANGRY };
 
 // animated values, smoothed every frame
 float eyeScale = 1, eyeCy = 54;     // eyes shrink and move up for subtitles
@@ -370,10 +370,11 @@ void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
           int R = (int)(w * 0.52f);
           cv->fillCircle(cx, top + (int)(h * 0.34f) + R, R, BLACK);
           cv->fillRect(cx - (int)w / 2 - 2, top + (int)(h * 0.34f) + R, (int)w + 4, (int)h, BLACK);
-        } else if (shape == SAD && h > 8) {
-          // eyelid sloping down to the outside
+        } else if ((shape == SAD || shape == ANGRY) && h > 8) {
+          // eyelid sloping down to the outside (sad) or to the middle (angry)
           int x0 = cx - (int)w / 2 - 2, x1 = cx + (int)w / 2 + 2;
-          if (i == 0) cv->fillTriangle(x0, top - 1, x1, top - 1, x0, top + (int)(h * 0.55f), BLACK);
+          bool outer = (i == 0) == (shape == SAD);
+          if (outer) cv->fillTriangle(x0, top - 1, x1, top - 1, x0, top + (int)(h * 0.55f), BLACK);
           else cv->fillTriangle(x0, top - 1, x1, top - 1, x1, top + (int)(h * 0.55f), BLACK);
         }
       }
@@ -799,6 +800,56 @@ void idleFace(const FaceInfo &f, uint32_t now, uint32_t t) {
   centerText(f.note[0] ? f.note : f.ip, 119, f.note[0] ? AMBER : DIM);
 }
 
+// ----------------------------------------------------- AI emotions -------
+// The companion AI in the phone app decides how it feels and sends it here.
+Shape emotionShape(const char *e, Shape fallback) {
+  if (!e || !e[0]) return fallback;
+  if (!strcmp(e, "happy") || !strcmp(e, "excited") || !strcmp(e, "shy")) return HAPPY;
+  if (!strcmp(e, "love")) return HEART;
+  if (!strcmp(e, "sad")) return SAD;
+  if (!strcmp(e, "angry")) return ANGRY;
+  if (!strcmp(e, "laugh")) return BLISS;
+  if (!strcmp(e, "dizzy")) return SQUEEZE;
+  return NORMAL;            // neutral surprised sleepy thinking wink
+}
+
+void emotionScene(const FaceInfo &f, uint32_t now, uint32_t t) {
+  const char *e = f.emotion;
+  statusBar(f);
+  Shape sh = emotionShape(e, NORMAL);
+  float scale = 1.05f, open = 1, lx = f.s.present && f.s.hasLR ? f.s.lookX * 8 : 0, ly = 0;
+  static uint32_t lastFx = 0;
+  bool fx = now - lastFx > 380;
+  if (fx) lastFx = now;
+  if (!strcmp(e, "surprised")) { open = 1.3f; scale = 1.15f; ly = -3; centerText("!", 14, AMBER, 2); }
+  else if (!strcmp(e, "sleepy")) { open = 0.35f; tLid = 0.3f; ly = 4; sleepExtras(now); }
+  else if (!strcmp(e, "thinking")) { open = 0.8f; lx = 10; ly = -8; centerText("?", 14, DIM, 2); }
+  else if (!strcmp(e, "wink")) {                     // keep one eye closed
+    winkEye = 1;
+    if (now - winkStart > 400 || now - winkStart < 150) winkStart = now - 260;
+  }
+  else if (!strcmp(e, "excited")) { ly = -fabsf(sinf(now / 150.f)) * 6; if (fx) spawn(P_SPARK, random(14, 114), random(20, 90), 0, -10, 800, 4, now); }
+  else if (!strcmp(e, "love")) { if (fx) spawn(P_HEART, random(20, 108), 96, random(-6, 7), -40, 1500, random(3, 6), now); }
+  else if (!strcmp(e, "angry")) {                    // little anger mark, shaking
+    lx += sinf(now / 40.f) * 1.5f;
+    int ax = 108, ay = 22;
+    cv->drawLine(ax - 5, ay - 2, ax - 2, ay - 2, RED); cv->drawLine(ax - 2, ay - 5, ax - 2, ay - 2, RED);
+    cv->drawLine(ax + 5, ay - 2, ax + 2, ay - 2, RED); cv->drawLine(ax + 2, ay - 5, ax + 2, ay - 2, RED);
+    cv->drawLine(ax - 5, ay + 2, ax - 2, ay + 2, RED); cv->drawLine(ax - 2, ay + 5, ax - 2, ay + 2, RED);
+    cv->drawLine(ax + 5, ay + 2, ax + 2, ay + 2, RED); cv->drawLine(ax + 2, ay + 5, ax + 2, ay + 2, RED);
+  } else if (!strcmp(e, "sad")) {                    // a tear rolling down
+    float p = fmodf(now / 1600.f, 1.f);
+    int tx = 64 - (int)(26 * eyeScale) - 8, ty = (int)eyeCy + 14 + (int)(p * 26);
+    uint16_t c = mix(BLUE, BLACK, p * p);
+    cv->fillCircle(tx, ty + 2, 3, c);
+    cv->fillTriangle(tx - 3, ty + 1, tx + 3, ty + 1, tx, ty - 5, c);
+  }
+  lookK = 0.3f;
+  setEyes(open, lx, ly);
+  drawEyes(sh, now, scale, 54);
+  if (!strcmp(e, "shy") || !strcmp(e, "love")) blush((int)eyeCy, eyeScale);
+}
+
 // --------------------------------------------------------------- frame -----
 FaceMode lastMode = FACE_BOOT;
 
@@ -861,7 +912,7 @@ void frame(uint32_t now) {
       statusBar(f);
       setEyes(1, lookX * 0.6f, -2);
       if (f.subPos >= 0 && f.sub[0]) {
-        drawEyes(HAPPY, now, 0.62f, 34);              // small eyes, room for subtitles
+        drawEyes(emotionShape(f.emotion, HAPPY), now, 0.62f, 34);   // small eyes, room for subtitles
         mouth(mouthLevelFor(f.sub, f.subPos), now, 62, 9);
         subtitles(f.sub, f.subPos);
       } else {
@@ -869,6 +920,10 @@ void frame(uint32_t now) {
         mouth(0.5f, now, 100, 18);
         marquee(f.text, 119, WHITE, t);
       }
+      break;
+
+    case FACE_EMOTION:
+      emotionScene(f, now, t);
       break;
 
     case FACE_ERROR:

@@ -27,7 +27,7 @@
 #include "sensors.h"
 #include "oled.h"
 
-#define FW_VERSION "3.0.0"
+#define FW_VERSION "3.1.0"
 #define MAX_BODY_BYTES 16384
 
 // loop() runs the AI request; give it more stack than the 8 KB default
@@ -124,6 +124,8 @@ String screenText;              // reply / error text that scrolls on the OLED
 String heardText;               // your words, live from the phone while you talk
 FaceMode faceOverride = FACE_IDLE;  // set by the app (/api/face) e.g. listening
 uint32_t faceOverrideUntil = 0;
+String faceEmotion;             // feeling chosen by the AI companion (/api/face emotion)
+String speakEmotion;            // feeling while the answer is shown (/api/speak emotion)
 FaceMode lastFaceMode = FACE_BOOT;
 uint32_t faceSince = 0;
 uint32_t bootMs = 0;
@@ -270,6 +272,8 @@ FaceInfo getFaceInfo() {
   f.modeSinceMs = faceSince;
   strlcpy(f.text, screenText.c_str(), sizeof f.text);
   if (m == FACE_LISTENING || m == FACE_THINKING) strlcpy(f.heard, heardText.c_str(), sizeof f.heard);
+  if (m == FACE_EMOTION) strlcpy(f.emotion, faceEmotion.c_str(), sizeof f.emotion);
+  if (m == FACE_SPEAKING) strlcpy(f.emotion, speakEmotion.c_str(), sizeof f.emotion);
   if (m == FACE_SPEAKING && subText.length()) {
     strlcpy(f.sub, subText.c_str(), sizeof f.sub);
     int len = strlen(f.sub);
@@ -439,6 +443,7 @@ void setupRoutes() {
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy"); }
     showQueue = in["text"].as<String>();
     if (showQueue.isEmpty()) showQueue = " ";
+    speakEmotion = in["emotion"] | "";                // the AI's feeling while it talks
     screenText = asciiOnly(showQueue).substring(0, 150);
     faceOverrideUntil = 0;
     UNLOCK();
@@ -484,12 +489,50 @@ void setupRoutes() {
     } else if (st == "error") {
       faceOverride = FACE_ERROR; faceOverrideUntil = now + 8000;
       if (hasText) screenText = txt.substring(0, 150);
+    } else if (st == "emotion") {
+      // {"state":"emotion","emotion":"love","ms":5000}: the AI decided how it feels
+      faceEmotion = in["emotion"] | "happy";
+      faceOverride = FACE_EMOTION;
+      faceOverrideUntil = now + constrain((int)(in["ms"] | 5000), 500, 60000);
     } else {
       faceOverrideUntil = 0;                       // idle: back to the normal face
     }
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
+
+  // Sensors + what happened since the last call: /api/sense?since=12
+  // The companion app polls this about every 0.7 s to react to pets and visitors.
+  server.on("/api/sense", HTTP_GET, [](AsyncWebServerRequest *r) {
+    uint32_t since = r->hasParam("since") ? strtoul(r->getParam("since")->value().c_str(), nullptr, 10) : 0;
+    SenseInfo si = sense::get();
+    sense::SenseEvent ev[sense::EVQ];
+    uint32_t seq = 0;
+    int n = sense::eventsSince(since, ev, sense::EVQ, seq);
+    uint32_t now = millis();
+    JsonDocument d;
+    d["seq"] = seq;
+    d["ultrasonic"] = si.ultraOk;
+    d["two_sensors"] = si.hasLR;
+    d["distance_cm"] = si.distCm;
+    d["look_x"] = serialized(String(si.lookX, 2));
+    d["person"] = si.present;
+    d["ir"] = si.irOk;
+    d["petting"] = si.petting;
+    d["pets"] = si.pets;
+    d["love"] = si.love;
+    LOCK();
+    d["state"] = stateName(state);
+    UNLOCK();
+    JsonArray a = d["events"].to<JsonArray>();
+    for (int i = 0; i < n; i++) {
+      JsonObject e = a.add<JsonObject>();
+      e["seq"] = ev[i].seq;
+      e["type"] = sense::eventName(ev[i].type);
+      e["ago_ms"] = now - ev[i].ms;
+    }
+    sendJson(r, 200, d);
+  });
 
   server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest *r) {
     LOCK();

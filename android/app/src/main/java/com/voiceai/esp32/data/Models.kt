@@ -27,6 +27,21 @@ enum class Persona(val label: String, val emoji: String, val prompt: String) {
     COACH("Coach", "💪", "Act as a motivating study and life coach. Be encouraging and give 2-3 practical tips."),
 }
 
+/** How the companion behaves. */
+enum class Personality(val label: String, val prompt: String) {
+    CHEERFUL("Cheerful", "bubbly, cheerful and playful; you love little jokes and get excited easily"),
+    SHY("Shy", "sweet and a bit shy; you get flustered and blush easily, but you are very caring"),
+    TEASING("Teasing", "playfully teasing and a little tsundere: you pretend to be annoyed, but you secretly care a lot"),
+    CALM("Calm", "calm, gentle and wise, like a caring big sister who listens well"),
+}
+
+/** How often the companion starts talking by herself. Seconds of silence before she decides. */
+enum class Chattiness(val label: String, val minSec: Int, val maxSec: Int) {
+    QUIET("Quiet", 15 * 60, 30 * 60),
+    NORMAL("Normal", 4 * 60, 9 * 60),
+    CHATTY("Chatty", 90, 4 * 60),
+}
+
 data class AppSettings(
     val espHost: String = "",
     val pcHost: String = "192.168.80.189",
@@ -43,6 +58,17 @@ data class AppSettings(
     val temperature: Float = 0.7f,
     val textScale: Float = 1f,
     val handsFree: Boolean = false,
+    // companion
+    val companionName: String = "Nova",
+    val userName: String = "",
+    val personality: Personality = Personality.CHEERFUL,
+    val chattiness: Chattiness = Chattiness.NORMAL,
+    val hairColor: String = "#8e74e6",
+    val eyeColor: String = "#d9577f",
+    val voicePitch: Float = 1.25f,
+    val voiceRate: Float = 1.0f,
+    val voiceName: String = "",
+    val talkMode: Boolean = true,          // listen again after she answers
 )
 
 data class Usage(

@@ -70,6 +70,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Tv
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -175,6 +176,9 @@ private fun TopBar(vm: MainViewModel, onMenu: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onMenu) { Icon(Icons.Filled.Menu, "Chats") }
+        IconButton(onClick = { vm.screen = com.voiceai.esp32.Screen.COMPANION }) {
+            Icon(Icons.Outlined.Face, "Talk with ${vm.settings.companionName}")
+        }
         Row(
             Modifier
                 .clip(RoundedCornerShape(14.dp))

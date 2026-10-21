@@ -30,6 +30,16 @@ class Store(context: Context) {
             temperature = prefs.getFloat("temperature", d.temperature),
             textScale = prefs.getFloat("textScale", d.textScale),
             handsFree = prefs.getBoolean("handsFree", d.handsFree),
+            companionName = prefs.getString("cName", d.companionName) ?: d.companionName,
+            userName = prefs.getString("uName", d.userName) ?: d.userName,
+            personality = runCatching { Personality.valueOf(prefs.getString("cPers", d.personality.name)!!) }.getOrDefault(d.personality),
+            chattiness = runCatching { Chattiness.valueOf(prefs.getString("cChat", d.chattiness.name)!!) }.getOrDefault(d.chattiness),
+            hairColor = prefs.getString("cHair", d.hairColor) ?: d.hairColor,
+            eyeColor = prefs.getString("cEyes", d.eyeColor) ?: d.eyeColor,
+            voicePitch = prefs.getFloat("vPitch", d.voicePitch),
+            voiceRate = prefs.getFloat("vRate", d.voiceRate),
+            voiceName = prefs.getString("vName", d.voiceName) ?: d.voiceName,
+            talkMode = prefs.getBoolean("talkMode", d.talkMode),
         )
     }
 
@@ -50,6 +60,16 @@ class Store(context: Context) {
             .putFloat("temperature", s.temperature)
             .putFloat("textScale", s.textScale)
             .putBoolean("handsFree", s.handsFree)
+            .putString("cName", s.companionName)
+            .putString("uName", s.userName)
+            .putString("cPers", s.personality.name)
+            .putString("cChat", s.chattiness.name)
+            .putString("cHair", s.hairColor)
+            .putString("cEyes", s.eyeColor)
+            .putFloat("vPitch", s.voicePitch)
+            .putFloat("vRate", s.voiceRate)
+            .putString("vName", s.voiceName)
+            .putBoolean("talkMode", s.talkMode)
             .apply()
     }
 
@@ -91,6 +111,35 @@ class Store(context: Context) {
         }
         runCatching { usageFile.writeText(a.toString()) }
     }
+
+    // --------------------------------------------------------------- companion
+    private val talkFile = File(context.filesDir, "companion.json")
+
+    /** Things the companion remembers about you. */
+    fun loadMemories(): List<String> = runCatching {
+        val a = JSONArray(prefs.getString("memories", "[]"))
+        (0 until a.length()).map { a.getString(it) }
+    }.getOrDefault(emptyList())
+
+    fun saveMemories(list: List<String>) {
+        prefs.edit().putString("memories", JSONArray(list.takeLast(40)).toString()).apply()
+    }
+
+    /** Recent talk with the companion: role to text. */
+    fun loadTalk(): List<Pair<String, String>> = runCatching {
+        val a = JSONArray(talkFile.readText())
+        (0 until a.length()).map { val o = a.getJSONObject(it); o.getString("r") to o.getString("t") }
+    }.getOrDefault(emptyList())
+
+    fun saveTalk(list: List<Pair<String, String>>) {
+        val a = JSONArray()
+        list.takeLast(60).forEach { a.put(JSONObject().put("r", it.first).put("t", it.second)) }
+        runCatching { talkFile.writeText(a.toString()) }
+    }
+
+    var lastGreetMs: Long
+        get() = prefs.getLong("lastGreet", 0)
+        set(v) = prefs.edit().putLong("lastGreet", v).apply()
 
     // ----------------------------------------------------------------- helpers
     private fun chatTo(c: Chat): JSONObject {

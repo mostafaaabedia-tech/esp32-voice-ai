@@ -100,14 +100,22 @@ class VoiceInput(private val context: Context) {
     }
 }
 
-/** Phone text-to-speech. */
+/** Phone text-to-speech (the companion's voice). */
 class PhoneVoice(context: Context) {
-    private var ready = false
-    private var length = 0
+    @Volatile private var ready = false
+    @Volatile private var length = 0
+    @Volatile var active = false; private set
 
     /** Called while speaking: (position in the text, text length). Used to sync the OLED subtitles. */
     var onProgress: ((Int, Int) -> Unit)? = null
+    /** Every new word (lip sync). */
+    var onWord: (() -> Unit)? = null
+    var onStart: (() -> Unit)? = null
     var onDone: (() -> Unit)? = null
+
+    var pitch = 1f
+    var rate = 1f
+    var voiceName = ""
 
     private val tts = TextToSpeech(context.applicationContext) { status ->
         ready = status == TextToSpeech.SUCCESS
@@ -116,31 +124,45 @@ class PhoneVoice(context: Context) {
 
     private fun setListener() {
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { onDone?.invoke() }
-            @Deprecated("old API") override fun onError(utteranceId: String?) { onDone?.invoke() }
+            override fun onStart(utteranceId: String?) { active = true; onStart?.invoke() }
+            override fun onDone(utteranceId: String?) { active = false; onDone?.invoke() }
+            @Deprecated("old API") override fun onError(utteranceId: String?) { active = false; onDone?.invoke() }
+            override fun onStop(utteranceId: String?, interrupted: Boolean) { active = false }
             override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                onWord?.invoke()
                 onProgress?.invoke(start, length)
             }
         })
     }
 
+    /** Voices installed for this language (names to pick in Settings). */
+    fun voices(lang: String): List<String> = runCatching {
+        val l = Locale.forLanguageTag(lang).language
+        tts.voices.orEmpty().filter { it.locale.language == l && !it.isNetworkConnectionRequired }
+            .map { it.name }.sorted()
+    }.getOrDefault(emptyList())
+
     fun speak(text: String, lang: String): Boolean {
         if (!ready) return false
         return runCatching {
-            tts.language = Locale.forLanguageTag(lang)
+            val v = voiceName.takeIf { it.isNotBlank() }?.let { n -> tts.voices.orEmpty().firstOrNull { it.name == n } }
+            if (v != null) tts.voice = v else tts.language = Locale.forLanguageTag(lang)
+            tts.setPitch(pitch)
+            tts.setSpeechRate(rate)
             val t = text.take(TextToSpeech.getMaxSpeechInputLength() - 1)
             length = t.length
+            active = true
             tts.speak(t, TextToSpeech.QUEUE_FLUSH, null, "voiceai")
             true
         }.getOrDefault(false)
     }
 
     fun stop() {
+        active = false
         if (ready) tts.stop()
     }
 
-    val speaking: Boolean get() = ready && runCatching { tts.isSpeaking }.getOrDefault(false)
+    val speaking: Boolean get() = ready && (active || runCatching { tts.isSpeaking }.getOrDefault(false))
 
     fun shutdown() = tts.shutdown()
 }
