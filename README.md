@@ -37,6 +37,27 @@ The app also shows token usage for every answer, like the usage pages of cloud A
 | **Direct to PC** (default) | Phone → Ollama on the PC. The answer streams in live, then the phone sends it to the ESP32 screen. | Fastest: words appear as they are generated |
 | **Through ESP32** | Phone → ESP32 → Ollama (like the original sketch). The ESP32 shows the answer. | Works even if only the ESP32 knows the PC address |
 
+## Your AI companion (app home screen)
+
+The app opens on **Nova**, an original anime‑style AI companion. You can rename her and change her hair and eye colours. She lives in your phone and in the ESP32:
+
+- **She talks with you.** Tap the mic and speak. She answers with her voice and her face, and the OLED shows her words. With **talk mode** on, the mic opens again after she answers, so you can just keep talking.
+- **She's alive on screen.** She blinks, breathes, lip‑syncs her words and shows 14 expressions: happy, love (heart eyes), shy, excited, surprised, sad (tear), angry (anger mark), sleepy, thinking, laugh, wink and more. Her eyes follow your finger, and with two ultrasonic sensors they follow *you*.
+- **Touch her.**
+  - Rub her head → a hand pats her, she closes her eyes, blushes and hearts float up. The OLED blushes too.
+  - Poke her cheek → she pouts.
+  - Tap her → "huh? what's up?"
+- **She reacts to the real world.**
+  - IR pets → she says something cute.
+  - You walk up → she greets you (and says she missed you after a long time away).
+  - You get too close or walk away → she says something about it.
+- **She decides by herself.** Every few minutes (*Quiet / Normal / Chatty*) she decides whether to start a conversation. She might ask about your day, share a fun fact, remind you to drink water, or stay quiet. The screen shows what she decided.
+- **She has feelings.** Every reply starts with a feeling she picks herself, and it shows on both faces. Her love level, the time of day and how long nobody talked to her change her mood.
+- **She remembers you.** When you tell her about yourself she saves it, and she learns your name. You can see and delete what she remembers in *Settings → Your AI companion*.
+- **Make her your own.** Pick her personality (*Cheerful, Shy, Teasing, Calm*), voice pitch, speed and voice.
+
+The plain text chat (with token usage) is still there: tap the chat icon on her screen.
+
 ## The face
 
 <p align="center"><img src="docs/oled-face-preview.gif" width="220" alt="OLED face animation"></p>
@@ -179,8 +200,9 @@ Voice input uses Android's speech service (Google app).
 | `GET /api/info` | – | Device info, Ollama status, models, settings, token counters, plus `sensors{ultrasonic, two_sensors, distance_cm, person, ir, petting, pets, love}` |
 | `POST /api/ask` | `{"messages":[{"role":"user","content":"Hi"}], "speak":true}` | `202 {"id":5}` (or `409` if busy). `speak` = show the answer on the OLED. |
 | `GET /api/status` | – | `{"id","done_id","state":"idle/thinking/showing/error","reply","error","usage":{...}}` |
-| `POST /api/speak` | `{"text":"hello"}` | Shows text on the OLED as subtitles |
+| `POST /api/speak` | `{"text":"hello","emotion":"happy"}` | Shows text on the OLED as subtitles, with eyes for the feeling |
 | `POST /api/subpos` | `{"pos":120,"len":300}` or `{"done":true}` | Moves the subtitles with the phone's voice |
+| `GET /api/sense?since=N` | – | Sensors + events newer than N: `pet`, `pet_end`, `arrive`, `leave`, `too_close` |
 | `POST /api/stop` | – | Stops showing |
-| `POST /api/face` | `{"state":"listening"}` (or `thinking`, `error`, `idle`, optional `"text"`) | Sets the OLED face |
+| `POST /api/face` | `{"state":"listening"}` (or `thinking`, `error`, `idle`, optional `"text"`), or `{"state":"emotion","emotion":"love","ms":4000}` | Sets the OLED face |
 | `POST /api/config` | Any of `ollama_host, ollama_port, model, system_prompt, max_words, num_predict, num_ctx, read_ms_per_char` | Saved in flash |

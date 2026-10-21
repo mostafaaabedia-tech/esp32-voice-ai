@@ -155,7 +155,10 @@ private fun App(vm: MainViewModel) {
             delay(ms)
             if (!listening) return@launch
             if (heard.isNotBlank()) finish(true, heard)
-            else { finish(false, ""); vm.toast = "Didn't hear anything. Tap the mic and try again." }
+            else {
+                finish(false, "")
+                if (vm.screen != Screen.COMPANION) vm.toast = "Didn't hear anything. Tap the mic and try again."
+            }
         }
     }
 
@@ -170,7 +173,10 @@ private fun App(vm: MainViewModel) {
             onPartial = { heard = it; vm.faceHeard(it); if (!processing) armWatchdog(9000) },
             onLevel = { level = it },
             onFinal = { finish(true, it.ifBlank { heard }) },
-            onFail = { msg -> if (heard.isNotBlank()) finish(true, heard) else { finish(false, ""); vm.toast = msg } },
+            onFail = { msg ->
+                if (heard.isNotBlank()) finish(true, heard)
+                else { finish(false, ""); if (vm.screen != Screen.COMPANION) vm.toast = msg }
+            },
             onSpeechStart = { armWatchdog(15000) },                        // talking: allow a longer sentence
             onSpeechEnd = { processing = true; armWatchdog(3500) },        // stopped talking: wait briefly for the result
         )

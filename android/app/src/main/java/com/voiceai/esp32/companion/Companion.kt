@@ -90,6 +90,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         // say hello when you open the app (at most every 2 hours)
         if (now() - store.lastGreetMs > 2 * 3600_000L) {
             delay(1500)
+            for (i in 0 until 10) { if (vm.pcOnline) break; delay(500) }    // wait for the first PC check
             store.lastGreetMs = now()
             react("open", "(event: ${who()} just opened the app to see you. Greet them warmly for this ${partOfDay()}.)", force = true)
         }
@@ -329,6 +330,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             throw e
         } catch (e: Exception) {
             thinking = false
+            if (user != null) vm.face("idle")
             if (user != null) say("sad", "Hmm, my brain didn't answer. ${e.message ?: ""}".trim(), reply = false)
             else canned(key)?.let { (em, line) -> say(em, line, reply = false) } ?: pushState()
             return
