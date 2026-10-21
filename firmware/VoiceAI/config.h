@@ -18,19 +18,13 @@
 
 // ---- AI behaviour -------------------------------------------------------------
 #define DEFAULT_SYSTEM_PROMPT \
-  "You are a helpful voice assistant running on a small ESP32 speaker. " \
+  "You are a cute, helpful AI assistant living in a small ESP32 robot with an OLED face. " \
   "Answer clearly and briefly in plain sentences. No markdown, no emojis, no lists."
 #define DEFAULT_MAX_WORDS    40    // soft limit put into the system prompt
 #define DEFAULT_NUM_PREDICT  160   // hard limit on generated tokens
 #define DEFAULT_NUM_CTX      0     // 0 = use the model's default (fastest, no engine restart)
 #define OLLAMA_TIMEOUT_MS    65000 // first answer can be slow while the model loads (max 65535)
-
-// ---- Voice --------------------------------------------------------------------
-// 0 = SAM  : robot voice generated ON the ESP32, works fully offline
-// 1 = PC   : nicer voice from pc/tts_server.py running on your PC
-#define DEFAULT_VOICE_MODE   0
-#define DEFAULT_TTS_PORT     5050
-#define DEFAULT_VOLUME       2.0f  // 0.0 - 4.0 (gain into the PAM8406)
+#define DEFAULT_READ_MS_PER_CHAR 60 // answer subtitles on the OLED: ms per letter (lower = faster)
 
 // ---- OLED display (1.5 inch, 128x128) -----------------------------------------
 // Look at the back of your display or its shop page and pick the chip:
@@ -54,6 +48,28 @@
 #define OLED_DC          16
 #define OLED_RST         17     // set -1 if your I2C board has no RST pin (type 1 and 3 ignore it if -1)
 
+// ---- Sensors ------------------------------------------------------------------
+// Ultrasonic HC-SR04: the eyes follow how near / far you are.
+//   HC-SR04 VCC -> 5V (VIN), GND -> GND, TRIG -> ULTRA_TRIG,
+//   ECHO -> 1k resistor -> ULTRA_ECHO, and 2k resistor from ULTRA_ECHO to GND
+//   (ECHO gives 5 V, the ESP32 pin only takes 3.3 V). The HC-SR04P / RCWL-1601
+//   3.3 V versions can be connected directly.
+#define ULTRA_TRIG       26
+#define ULTRA_ECHO       27
+// Optional SECOND ultrasonic for left / right tracking. Mount sensor 1 on the
+// LEFT and sensor 2 on the RIGHT (as you look at the screen), ~10 cm apart.
+// Leave -1 if you only have one.
+#ifndef ULTRA2_TRIG
+#define ULTRA2_TRIG      -1     // e.g. 32
+#define ULTRA2_ECHO      -1     // e.g. 33
+#endif
+#define EYES_FLIP_X      0      // 1 if the eyes look the wrong way left/right
+// IR obstacle sensor (FC-51 / TCRT5000): wave or hold your hand over it to pet the AI.
+//   IR VCC -> 3V3, GND -> GND, OUT -> IR_PIN
+#define IR_PIN           34     // -1 if you have no IR sensor
+#define IR_ACTIVE_LOW    1      // most IR modules give LOW when they see your hand
+#define PRESENCE_CM      120    // someone closer than this = "a person is here"
+#define TOO_CLOSE_CM     8      // closer than this = "too close!" squint
+
 // ---- Hardware -----------------------------------------------------------------
-// Audio leaves the ESP32 on GPIO25 (internal DAC channel 1) -> PAM8406 L-IN.
 #define STATUS_LED_PIN       2     // on-board LED on most ESP32 DevKit boards

@@ -10,11 +10,15 @@
 //  Everything is drawn into a 128x128 colour canvas in RAM, then copied to the
 //  screen, so the same animation works on all three displays.
 //  It runs in its own task on core 0, so the face keeps moving while the ESP32
-//  waits for Ollama or speaks.
+//  waits for Ollama.
 //
-//  Moods:  boot logo -> WiFi spinner -> idle (blinks, looks around, falls asleep)
-//          listening (wide eyes + sound rings)  thinking (eyes up + orbit dots)
-//          speaking (happy eyes + mouth that follows the real audio)
+//  Moods:  boot logo -> WiFi spinner -> idle: follows you with its eyes
+//          (ultrasonic), says hi when you arrive, squints if you get too close,
+//          gets bored and falls asleep when you leave, yawns when you come back,
+//          winks / rolls its eyes / wiggles / heart eyes now and then
+//          petting (IR sensor): happy eyes, blush, floating hearts, love meter
+//          listening (wide eyes + your words live)  thinking (eyes up + orbit dots)
+//          answer (happy eyes + talking mouth + karaoke subtitles)
 //          error (sad eyes + message)
 // ============================================================================
 #pragma once
@@ -61,7 +65,7 @@ inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 const uint16_t BLACK = 0;
 const uint16_t WHITE = 0xFFFF;
-uint16_t TEAL, BLUE, DIM, RED, GREEN, AMBER, NAVY;
+uint16_t TEAL, BLUE, DIM, RED, GREEN, AMBER, NAVY, PINK;
 
 inline uint16_t mix(uint16_t a, uint16_t b, float t) {   // blend two colours
   t = constrain(t, 0.f, 1.f);
@@ -144,6 +148,118 @@ void statusBar(const FaceInfo &f) {
   cv->setCursor(W - 22, 3);
   cv->print("AI");
   cv->fillCircle(W - 6, 6, 2, f.aiOnline ? GREEN : RED);
+  if (f.s.ultraOk && f.s.present && f.s.distCm > 0) {   // how far you are
+    char b[12];
+    snprintf(b, sizeof b, "%dcm", f.s.distCm);
+    centerText(b, 3, DIM);
+  }
+  if (f.s.love >= 10) {                                   // small heart = it likes you
+    float r = 2.5f + f.s.love / 40.f;
+    int cx = 25, cy = 6;
+    int rr = max(1, (int)(r * 0.55f));
+    cv->fillCircle(cx - (int)(r * 0.48f), cy - (int)(r * 0.25f), rr, PINK);
+    cv->fillCircle(cx + (int)(r * 0.48f), cy - (int)(r * 0.25f), rr, PINK);
+    cv->fillTriangle(cx - (int)r, cy - (int)(r * 0.05f), cx + (int)r, cy - (int)(r * 0.05f), cx, cy + (int)(r * 0.95f), PINK);
+  }
+}
+
+// ----------------------------------------------------------- particles -----
+// Little things that float around the face: hearts when you pet it, sparkles
+// when it says hi or winks.
+enum PKind : uint8_t { P_HEART, P_SPARK };
+struct Particle {
+  float x0, y0, vx, vy, size;
+  uint32_t born, life;
+  PKind kind;
+  bool on;
+  float phase;
+};
+Particle parts[18];
+
+void spawn(PKind k, float x, float y, float vx, float vy, uint32_t life, float size, uint32_t now) {
+  for (auto &p : parts)
+    if (!p.on) {
+      p = {x, y, vx, vy, size, now, life, k, true, random(0, 628) / 100.f};
+      return;
+    }
+}
+
+void drawHeart(int cx, int cy, float r, uint16_t c) {
+  if (r < 1.5f) { cv->fillCircle(cx, cy, 1, c); return; }
+  int rr = max(1, (int)(r * 0.55f));
+  cv->fillCircle(cx - (int)(r * 0.48f), cy - (int)(r * 0.25f), rr, c);
+  cv->fillCircle(cx + (int)(r * 0.48f), cy - (int)(r * 0.25f), rr, c);
+  cv->fillTriangle(cx - (int)r, cy - (int)(r * 0.05f), cx + (int)r, cy - (int)(r * 0.05f), cx, cy + (int)(r * 0.95f), c);
+}
+
+void drawSpark(int cx, int cy, int s, uint16_t c) {
+  cv->drawFastHLine(cx - s, cy, 2 * s + 1, c);
+  cv->drawFastVLine(cx, cy - s, 2 * s + 1, c);
+  if (s >= 3) {
+    int d = s / 2;
+    cv->drawPixel(cx - d, cy - d, c); cv->drawPixel(cx + d, cy - d, c);
+    cv->drawPixel(cx - d, cy + d, c); cv->drawPixel(cx + d, cy + d, c);
+  }
+}
+
+void drawParts(uint32_t now) {
+  for (auto &p : parts) {
+    if (!p.on) continue;
+    uint32_t age = now - p.born;
+    if (age >= p.life) { p.on = false; continue; }
+    float k = (float)age / p.life, sec = age / 1000.f;
+    int x = (int)(p.x0 + p.vx * sec + (p.kind == P_HEART ? sinf(sec * 5 + p.phase) * 3 : 0));
+    int y = (int)(p.y0 + p.vy * sec);
+    float pop = k < 0.15f ? k / 0.15f : 1;                       // grow in quickly
+    uint16_t c = mix(p.kind == P_HEART ? PINK : WHITE, BLACK, k * k);
+    if (p.kind == P_HEART) drawHeart(x, y, p.size * pop, c);
+    else drawSpark(x, y, max(1, (int)(p.size * (1 - k) + 1)), c);
+  }
+}
+
+/** Thick line with round ends (for >< and ^^ eyes). */
+void thickLine(float x0, float y0, float x1, float y1, float t, uint16_t c) {
+  float dx = x1 - x0, dy = y1 - y0, L = sqrtf(dx * dx + dy * dy);
+  int r = max(1, (int)(t / 2));
+  if (L > 0.5f) {
+    float nx = -dy / L * t / 2, ny = dx / L * t / 2;
+    cv->fillTriangle(x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, c);
+    cv->fillTriangle(x0 + nx, y0 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny, c);
+  }
+  cv->fillCircle(x0, y0, r, c);
+  cv->fillCircle(x1, y1, r, c);
+}
+
+/** Speech bubble with a small tail, centred at cx. */
+void bubble(const char *s, int cx, int y, uint8_t size, uint16_t c) {
+  int w = strlen(s) * 6 * size + 12, h = 8 * size + 8;
+  int x = cx - w / 2;
+  cv->fillRoundRect(x, y, w, h, 6, BLACK);
+  cv->drawRoundRect(x, y, w, h, 6, c);
+  cv->fillTriangle(cx - 4, y + h - 1, cx + 4, y + h - 1, cx, y + h + 5, BLACK);
+  cv->drawLine(cx - 4, y + h - 1, cx, y + h + 5, c);
+  cv->drawLine(cx + 4, y + h - 1, cx, y + h + 5, c);
+  centerText(s, y + 4, c, size);
+}
+
+/** "///" blush under the eyes (reads well even on a white-only screen). */
+void blush(int cy, float sc) {
+  for (int side = -1; side <= 1; side += 2) {
+    int bx = 64 + side * (int)(30 * sc), by = cy + (int)(21 * sc);
+    for (int k = 0; k < 3; k++) {
+      int x = bx - 6 + k * 5;
+      cv->drawLine(x, by + 3, x + 3, by - 2, PINK);
+      cv->drawLine(x + 1, by + 3, x + 4, by - 2, PINK);
+    }
+  }
+}
+
+/** Love meter: heart + bar. */
+void loveBar(uint8_t love, int y) {
+  drawHeart(13, y + 3, 4.5f, PINK);
+  cv->drawRoundRect(22, y, 94, 8, 4, DIM);
+  int w = (int)(90 * love / 100.f);
+  if (w > 2) cv->fillRoundRect(24, y + 2, w, 4, 2, PINK);
 }
 
 // ---------------------------------------------------------------- eyes -----
@@ -171,17 +287,27 @@ void drawEye(int cx, int cy, float w, float h, uint16_t top, uint16_t bottom, bo
     }
   }
   // small shine dot
-  if (shine && ih > 14) cv->fillCircle(x + iw - 8, y + 7, 3, WHITE);
+  // (on the white-only SH1107 a black dot reads like a pupil / reflection)
+  if (shine && ih > 14) cv->fillCircle(x + iw - 8, y + 7, 3, OLED_TYPE == 3 ? BLACK : WHITE);
 }
 
-enum Shape { NORMAL, HAPPY, SAD };
+enum Shape { NORMAL, HAPPY, SAD, HEART, SQUEEZE, BLISS };
 
-float eyeScale = 1, eyeCy = 54;   // animated: eyes shrink and move up for subtitles
+// animated values, smoothed every frame
+float eyeScale = 1, eyeCy = 54;     // eyes shrink and move up for subtitles
+float converge = 0, tConverge = 0;  // both eyes turn inward = focusing on something close
+float lid = 0, tLid = 0;            // 0 .. 0.6 flat upper eyelid (bored / sleepy)
+float lookK = 0.18f;                // how fast the eyes move to their target
+int winkEye = -1;                   // 0 / 1 = this eye is winking
+uint32_t winkStart = 0;
 
 void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
   eyeScale = approach(eyeScale, scale, 0.2f);
   eyeCy = approach(eyeCy, centerY, 0.2f);
-  const float baseW = 30 * eyeScale, baseH = 38 * eyeScale;
+  converge = approach(converge, tConverge, 0.15f);
+  lid = approach(lid, tLid, 0.15f);
+  float sc = eyeScale * (1 + 0.022f * sinf(now / 850.f));   // gentle "breathing"
+  const float baseW = 30 * sc, baseH = 38 * sc;
   const int cy = (int)eyeCy;
   Eye *eyes[2] = {&eyeL, &eyeR};
   const int gapX = (int)(26 * eyeScale);
@@ -197,28 +323,60 @@ void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
   uint32_t bt = now - blinkStart;
   if (bt < 140) blink = 1 - sinf(PI * bt / 140.f) * 0.92f;
   else if (doubleBlink && bt > 220 && bt < 360) blink = 1 - sinf(PI * (bt - 220) / 140.f) * 0.92f;
+  if (shape == HEART || shape == SQUEEZE || shape == BLISS) blink = 1;
 
   for (int i = 0; i < 2; i++) {
     Eye &e = *eyes[i];
     e.open = approach(e.open, e.tOpen, 0.22f);
-    e.lx = approach(e.lx, e.tlx, 0.18f);
-    e.ly = approach(e.ly, e.tly, 0.18f);
-    float h = baseH * e.open * blink;
+    e.lx = approach(e.lx, e.tlx, lookK);
+    e.ly = approach(e.ly, e.tly, lookK);
+    float wink = 1;
+    if (i == winkEye) {
+      uint32_t wt = now - winkStart;
+      if (wt < 520) wink = 1 - sinf(PI * wt / 520.f) * 0.9f;
+      else winkEye = -1;
+    }
+    float h = baseH * e.open * blink * wink;
     float w = baseW * (1 + (1 - min(1.f, e.open)) * 0.15f);   // squint = a little wider
-    int cx = cxs[i] + (int)e.lx, ey = cy + (int)e.ly;
-    drawEye(cx, ey, w, h, TEAL, BLUE, shape == NORMAL);
+    int cx = cxs[i] + (int)e.lx + (i == 0 ? (int)converge : -(int)converge);
+    int ey = cy + (int)e.ly;
 
-    if (shape == HAPPY && h > 10) {
-      // a big black circle eats the bottom -> smiling arch eyes, like  ^  ^
-      int R = (int)(w * 0.52f);
-      int top = ey - (int)h / 2;
-      cv->fillCircle(cx, top + (int)(h * 0.34f) + R, R, BLACK);
-      cv->fillRect(cx - (int)w / 2 - 2, top + (int)(h * 0.34f) + R, (int)w + 4, (int)h, BLACK);
-    } else if (shape == SAD && h > 8) {
-      // eyelid sloping down to the outside
-      int x0 = cx - (int)w / 2 - 2, x1 = cx + (int)w / 2 + 2, top = ey - (int)h / 2 - 1;
-      if (i == 0) cv->fillTriangle(x0, top, x1, top, x0, top + (int)(h * 0.55f), BLACK);
-      else cv->fillTriangle(x0, top, x1, top, x1, top + (int)(h * 0.55f), BLACK);
+    switch (shape) {
+      case HEART: {
+        float pulse = 1 + 0.13f * sinf(now / 110.f);
+        drawHeart(cx, ey, 15 * sc * pulse, PINK);
+        break;
+      }
+      case SQUEEZE: {                               // >  <
+        float hw = 10 * sc, hh = 11 * sc, d = i == 0 ? 1 : -1;
+        thickLine(cx - d * hw, ey - hh, cx + d * hw, ey, 5 * sc, TEAL);
+        thickLine(cx + d * hw, ey, cx - d * hw, ey + hh, 5 * sc, TEAL);
+        break;
+      }
+      case BLISS: {                                 // ^  ^  (eyes closed, very happy)
+        float hw = 12 * sc;
+        thickLine(cx - hw, ey + 5 * sc, cx, ey - 6 * sc, 5 * sc, TEAL);
+        thickLine(cx, ey - 6 * sc, cx + hw, ey + 5 * sc, 5 * sc, TEAL);
+        break;
+      }
+      default: {
+        drawEye(cx, ey, w, h, TEAL, BLUE, shape == NORMAL && lid < 0.2f);
+        int top = ey - (int)h / 2;
+        if (lid > 0.02f && h > 6) {                 // flat eyelid from the top
+          cv->fillRect(cx - (int)w / 2 - 2, top - 1, (int)w + 4, (int)(h * lid) + 1, BLACK);
+        }
+        if (shape == HAPPY && h > 10) {
+          // a big black circle eats the bottom -> smiling arch eyes, like  ^  ^
+          int R = (int)(w * 0.52f);
+          cv->fillCircle(cx, top + (int)(h * 0.34f) + R, R, BLACK);
+          cv->fillRect(cx - (int)w / 2 - 2, top + (int)(h * 0.34f) + R, (int)w + 4, (int)h, BLACK);
+        } else if (shape == SAD && h > 8) {
+          // eyelid sloping down to the outside
+          int x0 = cx - (int)w / 2 - 2, x1 = cx + (int)w / 2 + 2;
+          if (i == 0) cv->fillTriangle(x0, top - 1, x1, top - 1, x0, top + (int)(h * 0.55f), BLACK);
+          else cv->fillTriangle(x0, top - 1, x1, top - 1, x1, top + (int)(h * 0.55f), BLACK);
+        }
+      }
     }
   }
 }
@@ -236,6 +394,46 @@ void setEyes(float open, float lx, float ly) {
   eyeL.tOpen = eyeR.tOpen = open;
   eyeL.tlx = eyeR.tlx = lx;
   eyeL.tly = eyeR.tly = ly;
+}
+
+/** Defaults every frame; the scenes below change what they need. */
+void resetFace() {
+  tConverge = 0;
+  tLid = 0;
+  lookK = 0.18f;
+}
+
+// ---------------------------------------------------- follow the person ----
+float distSmooth = -1, distSpeed = 0;   // cm, cm/s
+uint32_t distT = 0;
+float jx = 0, jy = 0;                   // tiny eye movements so it looks alive
+
+void updateDistance(const SenseInfo &s, uint32_t now) {
+  float dt = distT ? (now - distT) / 1000.f : 0;
+  distT = now;
+  if (!s.present) { distSmooth = -1; distSpeed = 0; return; }
+  if (s.distCm <= 0) return;                         // one missed echo: keep the last value
+  if (distSmooth < 0) { distSmooth = s.distCm; return; }
+  float prev = distSmooth;
+  distSmooth = approach(distSmooth, s.distCm, 0.3f);
+  if (dt > 0) distSpeed = approach(distSpeed, (distSmooth - prev) / dt, 0.3f);
+}
+
+/** Eyes look at you: bigger and focused when you are close, small when far. */
+float trackPerson(const SenseInfo &s, uint32_t now) {
+  float d = constrain(distSmooth < 0 ? PRESENCE_CM / 2.f : distSmooth, 10.f, (float)PRESENCE_CM);
+  float nearK = 1 - (d - 10) / (PRESENCE_CM - 10);        // 1 = close .. 0 = far
+  if (now >= nextLook) {
+    nextLook = now + random(500, 1700);
+    jx = random(-2, 3);
+    jy = random(-1, 2);
+  }
+  float x = (s.hasLR ? s.lookX * 15 : 0) + jx;
+  float y = -1 - nearK * 5 + jy;                           // look up at your face when close
+  float open = fabsf(distSpeed) > 35 ? 1.15f : 1.f;        // you move -> it pays attention
+  setEyes(open, x, y);
+  tConverge = nearK > 0.55f ? (nearK - 0.55f) * 12 : 0;    // cross a little when very close
+  return 0.86f + nearK * 0.36f;                            // eye size
 }
 
 // ------------------------------------------------------------ screens ------
@@ -301,9 +499,10 @@ void thinkingExtras(uint32_t t) {
   centerText(buf, 119, DIM);
 }
 
+/** Talking mouth: opens on vowels of the word being shown. */
 float mouthSmooth = 0;
-void mouth(const FaceInfo &f, uint32_t now, int cy, float maxH) {
-  mouthSmooth = approach(mouthSmooth, f.audioLevel / 255.f, 0.45f);
+void mouth(float level, uint32_t now, int cy, float maxH) {
+  mouthSmooth = approach(mouthSmooth, level, 0.45f);
   float lvl = max(mouthSmooth, 0.12f);
   const int bars = 9, bw = 4, gap = 3;
   int x0 = 64 - (bars * (bw + gap) - gap) / 2;
@@ -315,12 +514,19 @@ void mouth(const FaceInfo &f, uint32_t now, int cy, float maxH) {
   }
 }
 
+float mouthLevelFor(const char *s, int pos) {
+  if (pos < 0 || !s[pos]) return 0.1f;
+  char c = tolower(s[pos]);
+  if (strchr("aeiouy", c)) return 0.95f;
+  if (isalnum((unsigned char)c)) return 0.5f;
+  return 0.12f;
+}
+
 // ------------------------------------------------------------ subtitles ----
-// Karaoke style: words already spoken are white, the word being spoken now is
-// highlighted, the next words are dim. Lines scroll up as the voice goes on.
+// Karaoke style: words already read are white, the current word is
+// highlighted, the next words are dim. Lines scroll up as it goes on.
 const int SUB_TOP = 74, SUB_LINE = 13, SUB_LINES = 4, SUB_CHARS = 20;
 float subScroll = 0;
-int lastLine = 0;
 
 struct Word { int16_t start, len, line, col; };
 
@@ -342,7 +548,7 @@ void subtitles(const char *s, int pos) {
   }
   if (!n) return;
 
-  // which word is being spoken?
+  // which word is it at?
   int cur = 0;
   for (int k = 0; k < n; k++) if (words[k].start <= pos) cur = k;
   int target = max(0, words[cur].line - 1);           // keep the current line second from top
@@ -373,16 +579,6 @@ void subtitles(const char *s, int pos) {
   }
 }
 
-void speakingExtras(const FaceInfo &f, uint32_t now, uint32_t t) {
-  if (f.subPos >= 0 && f.sub[0]) {
-    mouth(f, now, 62, 9);
-    subtitles(f.sub, f.subPos);
-  } else {
-    mouth(f, now, 100, 18);
-    marquee(f.text, 119, WHITE, t);
-  }
-}
-
 void sleepExtras(uint32_t now) {
   for (int k = 0; k < 3; k++) {
     float p = fmodf(now / 2600.f + k / 3.f, 1.f);
@@ -394,6 +590,215 @@ void sleepExtras(uint32_t now) {
   }
 }
 
+// ------------------------------------------------------- idle scenes -------
+const uint32_t SLEEP_MS = 45000;        // nobody around this long -> falls asleep
+const uint32_t SLEEP_NO_SENSOR_MS = 120000;
+
+enum Trick { T_NONE, T_WINK, T_ROLL, T_HEARTS, T_WIGGLE, T_PEEK, T_SQUISH };
+Trick trick = T_NONE;
+uint32_t trickStart = 0, nextTrick = 0;
+const uint32_t TRICK_LEN[] = {0, 600, 1200, 1700, 1300, 1700, 900};
+
+void startTrick(const SenseInfo &s, uint32_t now) {
+  int r = random(100);
+  if (s.love >= 35 && r < 25) trick = T_HEARTS;
+  else if (r < 45) trick = s.present || !s.ultraOk ? T_WINK : T_PEEK;
+  else if (r < 62) trick = T_ROLL;
+  else if (r < 78) trick = T_WIGGLE;
+  else if (r < 90) trick = T_PEEK;
+  else trick = T_SQUISH;
+  trickStart = now;
+  if (trick == T_WINK) {
+    winkEye = random(2);
+    winkStart = now;
+    spawn(P_SPARK, winkEye ? 104 : 24, 34, 0, -8, 700, 4, now);
+  }
+  if (trick == T_HEARTS) spawn(P_HEART, 64, 84, 0, -26, 1500, 5, now);
+}
+
+/** Random little moves so the face never looks frozen. Returns the eye shape. */
+Shape doTrick(uint32_t now, float &scale) {
+  uint32_t tt = now - trickStart;
+  switch (trick) {
+    case T_ROLL: {                                   // eyes roll around in a circle
+      float a = tt / (float)TRICK_LEN[T_ROLL] * 2 * PI;
+      lookK = 0.5f;
+      eyeL.tlx = eyeR.tlx = sinf(a) * 12;
+      eyeL.tly = eyeR.tly = -cosf(a) * 7;
+      return NORMAL;
+    }
+    case T_HEARTS: return HEART;
+    case T_WIGGLE:                                   // happy wiggle side to side
+      lookK = 0.45f;
+      eyeL.tlx = eyeR.tlx = sinf(tt / 85.f) * 6;
+      return HAPPY;
+    case T_PEEK:                                     // looks left, then right
+      lookK = 0.3f;
+      eyeL.tlx = eyeR.tlx = tt < 800 ? -15 : 15;
+      eyeL.tly = eyeR.tly = 2;
+      return NORMAL;
+    case T_SQUISH: {                                 // squash and pop like jelly
+      float k = sinf(PI * tt / TRICK_LEN[T_SQUISH]);
+      eyeL.tOpen = eyeR.tOpen = 1 - k * 0.45f;
+      scale *= 1 + k * 0.12f;
+      return NORMAL;
+    }
+    default: return NORMAL;
+  }
+}
+
+void petScene(const FaceInfo &f, uint32_t now) {
+  const SenseInfo &s = f.s;
+  uint32_t pt = now - s.petSinceMs;
+  static uint32_t lastHeart = 0;
+  if (now - lastHeart > 260) {
+    lastHeart = now;
+    spawn(P_HEART, random(22, 107), random(70, 92), random(-8, 9), -random(30, 55), 1700, random(3, 7), now);
+  }
+  lookK = 0.4f;
+  setEyes(1, sinf(now / 150.f) * 4, -2);             // nuzzles your hand
+  drawEyes(pt > 3500 ? BLISS : HAPPY, now, 1.05f, 50);
+  blush((int)eyeCy, eyeScale);
+  const char *msg = pt < 1500 ? "hehe~" : pt < 3500 ? "that tickles!" : s.love >= 90 ? "best friends! <3" : "purrr... <3";
+  centerText(msg, 99, PINK);
+  loveBar(s.love, 113);
+}
+
+void afterPetScene(const FaceInfo &f, uint32_t now) {
+  const SenseInfo &s = f.s;
+  setEyes(1, 0, -fabsf(sinf(now / 200.f)) * 5);      // happy bounce
+  lookK = 0.35f;
+  drawEyes(HAPPY, now, 1.02f, 52);
+  blush((int)eyeCy, eyeScale);
+  centerText(s.pets % 3 == 0 ? "more pets?" : "thank you! <3", 99, PINK);
+  loveBar(s.love, 113);
+}
+
+void tooCloseScene(uint32_t now) {
+  setEyes(1, sinf(now / 35.f) * 2, 0);               // shaking
+  lookK = 0.6f;
+  drawEyes(SQUEEZE, now, 1.1f, 52);
+  float p = fmodf(now / 1400.f, 1.f);                // sweat drop sliding down
+  int sx = 112, sy = 26 + (int)(p * 14);
+  uint16_t c = mix(BLUE, BLACK, p * p);
+  cv->fillCircle(sx, sy + 3, 3, c);
+  cv->fillTriangle(sx - 3, sy + 2, sx + 3, sy + 2, sx, sy - 4, c);
+  centerText("too close!", 104, AMBER);
+}
+
+const char *GREETINGS[] = {"Hi!", "Hello!", "Hey!", "Hiya!"};
+
+/** Someone arrived: (yawn if it was asleep) -> surprised -> happy "Hi!" */
+bool greetScene(const FaceInfo &f, uint32_t now) {
+  const SenseInfo &s = f.s;
+  if (!s.arrivedMs || s.arrivedMs < f.modeSinceMs) return false;
+  bool wake = s.awayBeforeMs > SLEEP_MS;
+  uint32_t a = now - s.arrivedMs, wakeLen = wake ? 1700 : 0;
+  if (a > wakeLen + 3200) return false;
+  static uint32_t sparkedFor = 0;
+
+  if (a < wakeLen) {                                 // waking up with a yawn
+    float p = a / (float)wakeLen;
+    tLid = 0.35f * (1 - p);
+    setEyes(0.15f + p * 0.85f, 0, 4 - p * 5);
+    drawEyes(NORMAL, now, 0.95f, 50);
+    float m = sinf(PI * min(1.f, p * 1.25f));
+    if (m > 0.05f) {
+      int rw = 5 + (int)(6 * m), rh = 2 + (int)(9 * m);
+      cv->fillRoundRect(64 - rw, 92 - rh, 2 * rw, 2 * rh, min(rw, rh), TEAL);
+      if (rw > 3 && rh > 3) cv->fillRoundRect(64 - rw + 3, 92 - rh + 3, 2 * rw - 6, 2 * rh - 6, min(rw, rh) - 3, BLACK);
+    }
+    centerText("*yawn*", 112, DIM);
+    return true;
+  }
+  uint32_t g = a - wakeLen;
+  if (sparkedFor != s.arrivedMs) {                   // sparkle burst
+    sparkedFor = s.arrivedMs;
+    for (int k = 0; k < 6; k++) {
+      float ang = k * PI / 3 + 0.4f;
+      spawn(P_SPARK, 64 + cosf(ang) * 40, 56 + sinf(ang) * 30, cosf(ang) * 25, sinf(ang) * 20, 900, 4, now);
+    }
+  }
+  if (g < 650) {                                     // surprised: wide eyes + "!"
+    nextBlink = max(nextBlink, now + 700);           // no blinking while surprised
+    setEyes(1.3f, 0, -3);
+    lookK = 0.35f;
+    drawEyes(NORMAL, now, 1.12f, 58);
+    centerText("!", 13, AMBER, 2);
+  } else {                                           // happy bounce + "Hi!"
+    setEyes(1, s.hasLR ? s.lookX * 10 : 0, -fabsf(sinf(now / 170.f)) * 5);
+    lookK = 0.35f;
+    drawEyes(HAPPY, now, 1.05f, 60);
+    bubble(GREETINGS[(s.arrivedMs / 7) % 4], 64, 13, 2, WHITE);
+  }
+  return true;
+}
+
+void idleFace(const FaceInfo &f, uint32_t now, uint32_t t) {
+  const SenseInfo &s = f.s;
+  statusBar(f);
+  updateDistance(s, now);
+
+  // 1) a hand on the IR sensor = petting
+  if (s.petting) { trick = T_NONE; petScene(f, now); return; }
+  if (s.pets && s.lastPetMs && now - s.lastPetMs < 3000) { afterPetScene(f, now); return; }
+  // 2) too close!
+  if (s.present && s.distCm > 0 && s.distCm < TOO_CLOSE_CM) { tooCloseScene(now); return; }
+  // 3) someone just arrived
+  if (greetScene(f, now)) { trick = T_NONE; return; }
+
+  // 4) asleep when nobody is around
+  uint32_t lastActive = max(f.modeSinceMs, s.lastPetMs);
+  bool asleep = s.ultraOk ? (!s.present && now - max(lastActive, s.absentSinceMs) > SLEEP_MS)
+                          : (now - lastActive > SLEEP_NO_SENSOR_MS);
+  if (asleep) {
+    trick = T_NONE;
+    setEyes(0.14f, 0, 6 + sinf(now / 1300.f) * 2);   // slow breathing
+    drawEyes(NORMAL, now, 0.95f);
+    sleepExtras(now);
+    centerText(f.note[0] ? f.note : f.ip, 119, f.note[0] ? AMBER : DIM);
+    return;
+  }
+
+  // 5) awake: follow you, or look for you, plus random tricks
+  float scale = 1;
+  const char *line = nullptr;
+  if (s.ultraOk && s.present) {
+    scale = trackPerson(s, now);
+  } else if (s.ultraOk) {
+    uint32_t alone = now - max(s.absentSinceMs, f.modeSinceMs);
+    eyeL.tOpen = eyeR.tOpen = 1;
+    if (s.absentSinceMs > s.presentSinceMs && s.presentSinceMs && now - s.absentSinceMs < 3500 &&
+        s.absentSinceMs - s.presentSinceMs > 3000) {
+      lookK = 0.3f;
+      lookAround(now, 1.4f);                         // where did you go?
+      line = "where did you go?";
+    } else {
+      lookAround(now, 1.2f);
+      if (alone > 20000) tLid = 0.38f;               // bored...
+    }
+    scale = 0.92f;
+  } else {
+    eyeL.tOpen = eyeR.tOpen = 1;
+    lookAround(now);
+  }
+
+  if (!nextTrick) nextTrick = now + 5000;
+  if (trick != T_NONE && now - trickStart > TRICK_LEN[trick]) {
+    trick = T_NONE;
+    nextTrick = now + random(6000, 14000);
+    eyeL.tOpen = eyeR.tOpen = 1;
+  }
+  if (trick == T_NONE && now >= nextTrick && !line) startTrick(s, now);
+  Shape shape = trick != T_NONE ? doTrick(now, scale) : NORMAL;
+  if (trick != T_NONE) tLid = 0;
+
+  drawEyes(shape, now, scale);
+  if (line) centerText(line, 104, DIM);
+  else if (!f.aiOnline) centerText("PC / Ollama offline", 104, AMBER);
+  centerText(f.note[0] ? f.note : f.ip, 119, f.note[0] ? AMBER : DIM);
+}
+
 // --------------------------------------------------------------- frame -----
 FaceMode lastMode = FACE_BOOT;
 
@@ -401,11 +806,16 @@ void frame(uint32_t now) {
   FaceInfo f = getFaceInfo();
   uint32_t t = now - f.modeSinceMs;
   cv->fillScreen(BLACK);
+  resetFace();
 
   if (f.mode != lastMode) {
     lastMode = f.mode;
     nextLook = now + 400;
+    trick = T_NONE;
+    winkEye = -1;
   }
+  // the eyes look at you in every mode (when the sensors know where you are)
+  float lookX = f.s.present && f.s.hasLR ? f.s.lookX * 10 : 0;
 
   switch (f.mode) {
     case FACE_BOOT:
@@ -417,26 +827,13 @@ void frame(uint32_t now) {
       if (f.note[0]) centerText(f.note, 119, AMBER);
       break;
 
-    case FACE_IDLE: {
-      bool sleepy = t > 120000;                       // 2 min without activity
-      statusBar(f);
-      if (sleepy) {
-        setEyes(0.18f, 0, 6);
-        drawEyes(NORMAL, now);
-        sleepExtras(now);
-      } else {
-        eyeL.tOpen = eyeR.tOpen = 1;
-        lookAround(now);
-        drawEyes(NORMAL, now);
-      }
-      if (!f.aiOnline) centerText("PC / Ollama offline", 104, AMBER);
-      centerText(f.note[0] ? f.note : f.ip, 119, f.note[0] ? AMBER : DIM);
+    case FACE_IDLE:
+      idleFace(f, now, t);
       break;
-    }
 
     case FACE_LISTENING:
       statusBar(f);
-      setEyes(1.15f, 0, -2);
+      setEyes(1.15f, lookX, -2);
       if (f.heard[0]) {
         // you are talking: small eyes on top, your words appear live below
         drawEyes(NORMAL, now, 0.62f, 34);
@@ -460,12 +857,18 @@ void frame(uint32_t now) {
       thinkingExtras(t);
       break;
 
-    case FACE_SPEAKING:
+    case FACE_SPEAKING:                               // showing the answer
       statusBar(f);
-      setEyes(1, 0, -2);
-      if (f.subPos >= 0 && f.sub[0]) drawEyes(HAPPY, now, 0.62f, 34);   // small eyes, room for subtitles
-      else drawEyes(HAPPY, now);
-      speakingExtras(f, now, t);
+      setEyes(1, lookX * 0.6f, -2);
+      if (f.subPos >= 0 && f.sub[0]) {
+        drawEyes(HAPPY, now, 0.62f, 34);              // small eyes, room for subtitles
+        mouth(mouthLevelFor(f.sub, f.subPos), now, 62, 9);
+        subtitles(f.sub, f.subPos);
+      } else {
+        drawEyes(HAPPY, now);
+        mouth(0.5f, now, 100, 18);
+        marquee(f.text, 119, WHITE, t);
+      }
       break;
 
     case FACE_ERROR:
@@ -475,6 +878,17 @@ void frame(uint32_t now) {
       marquee(f.text[0] ? f.text : "Something went wrong", 112, RED, t);
       break;
   }
+
+  // petting while it is busy: hearts + blush on top of whatever it is doing
+  if (f.s.petting && f.mode != FACE_IDLE && f.mode != FACE_BOOT && f.mode != FACE_WIFI) {
+    static uint32_t lastHeart = 0;
+    if (now - lastHeart > 400) {
+      lastHeart = now;
+      spawn(P_HEART, random(10, 118), random(40, 70), 0, -30, 1300, random(3, 5), now);
+    }
+    blush((int)eyeCy, eyeScale);
+  }
+  drawParts(now);
   flush();
 }
 
@@ -503,6 +917,7 @@ inline void oledBegin() {
   GREEN = rgb(110, 210, 140);
   AMBER = rgb(240, 180, 90);
   NAVY = rgb(21, 64, 106);
+  PINK = rgb(255, 120, 170);
 
 #if OLED_TYPE == 1
   Wire.begin(OLED_SDA, OLED_SCL);

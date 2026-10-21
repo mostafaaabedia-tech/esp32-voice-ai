@@ -1,15 +1,16 @@
 // ============================================================================
-//  VoiceAI - ESP32 + PAM8406 local AI voice assistant
+//  VoiceAI - ESP32 local AI assistant with an animated face
 //
 //  Phone app  --HTTP/JSON-->  ESP32  --HTTP-->  Ollama (qwen2.5:1.5b on your PC)
 //                               |
-//                               +--> internal DAC (GPIO25) --> PAM8406 --> speaker
-//                               +--> 1.5" OLED: animated face (oled.h)
+//                               +--> 1.5" OLED: animated face + answer subtitles
+//                               +--> ultrasonic: the eyes follow you
+//                               +--> IR sensor: pet the AI
+//  The phone reads the answers out loud (no speaker on the ESP32).
 //
 //  Board package : esp32 by Espressif, version 3.x (Arduino IDE) / pioarduino
 //  Libraries     : ESP32Async/ESPAsyncWebServer, ESP32Async/AsyncTCP,
-//                  bblanchon/ArduinoJson 7, earlephilhower/ESP8266Audio 2.x,
-//                  earlephilhower/ESP8266SAM
+//                  bblanchon/ArduinoJson 7, Adafruit GFX + SH110X (your screen)
 // ============================================================================
 #include <WiFi.h>
 #include <esp_system.h>
@@ -20,20 +21,16 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 
-#include <AudioFileSourceHTTPStream.h>
-#include <AudioGeneratorWAV.h>
-#include <ESP8266SAM.h>
-
 #include "config.h"
 #include "types.h"
 #include "web_page.h"
-#include "dac_out.h"
+#include "sensors.h"
 #include "oled.h"
 
-#define FW_VERSION "2.6.0"
+#define FW_VERSION "3.0.0"
 #define MAX_BODY_BYTES 16384
 
-// loop() runs the AI request and the voice; give it more stack than the 8 KB default
+// loop() runs the AI request; give it more stack than the 8 KB default
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 /** Why did the ESP32 (re)start? Shown on the OLED and in the app. */
@@ -60,9 +57,7 @@ struct Settings {
   uint16_t maxWords;
   uint16_t numPredict;
   uint16_t numCtx;
-  uint8_t voiceMode;   // 0 = SAM on device, 1 = PC TTS server
-  uint16_t ttsPort;
-  float volume;
+  uint16_t readMsPerChar;   // how fast the answer subtitles move on the OLED
 } cfg;
 
 Preferences prefs;
@@ -76,9 +71,7 @@ void loadSettings() {
   cfg.maxWords     = prefs.getUShort("words", DEFAULT_MAX_WORDS);
   cfg.numPredict   = prefs.getUShort("npred", DEFAULT_NUM_PREDICT);
   cfg.numCtx       = prefs.getUShort("nctx2", DEFAULT_NUM_CTX);
-  cfg.voiceMode    = prefs.getUChar("voice", DEFAULT_VOICE_MODE);
-  cfg.ttsPort      = prefs.getUShort("ttsport", DEFAULT_TTS_PORT);
-  cfg.volume       = prefs.getFloat("vol", DEFAULT_VOLUME);
+  cfg.readMsPerChar = prefs.getUShort("readms", DEFAULT_READ_MS_PER_CHAR);
   prefs.end();
 }
 
@@ -91,9 +84,7 @@ void saveSettings() {
   prefs.putUShort("words", cfg.maxWords);
   prefs.putUShort("npred", cfg.numPredict);
   prefs.putUShort("nctx2", cfg.numCtx);
-  prefs.putUChar("voice", cfg.voiceMode);
-  prefs.putUShort("ttsport", cfg.ttsPort);
-  prefs.putFloat("vol", cfg.volume);
+  prefs.putUShort("readms", cfg.readMsPerChar);
   prefs.end();
 }
 
@@ -107,7 +98,7 @@ SemaphoreHandle_t stateLock;
 const char *stateName(JobState s) {
   switch (s) {
     case ST_THINKING: return "thinking";
-    case ST_SPEAKING: return "speaking";
+    case ST_SPEAKING: return "showing";
     case ST_ERROR:    return "error";
     default:          return "idle";
   }
@@ -117,20 +108,16 @@ volatile JobState state = ST_IDLE;
 uint32_t jobId = 0;            // increases on every /api/ask
 uint32_t finishedJobId = 0;    // id of the last job that has a reply
 String pendingBody;            // raw JSON of the request waiting for loop()
-bool pendingSpeak = false;
+bool pendingShow = false;      // show the answer on the OLED when it arrives
 String lastReply, lastError;
 Usage lastUsage;
 
-String speakQueue;             // text waiting to be spoken
-volatile bool stopAudio = false;
-
-// subtitles: what the speaker is saying right now (shown on the OLED)
-String subText;                 // full spoken text (ASCII, as sent to the voice)
-volatile int subChunkStart = 0; // robot voice: current phrase start / length / start time
-volatile int subChunkLen = 0;
-volatile uint32_t subChunkMs = 0;
-volatile int subStreamPos = -1; // PC voice: position worked out from the audio stream
-float samMsPerChar = 75;        // learned while speaking, keeps the words in sync
+// the answer shown word by word on the OLED
+String subText;                    // ASCII text
+uint32_t subStartMs = 0;           // when it started
+volatile int subPhonePos = -1;     // position sent by the phone while it reads out loud
+uint32_t subPhoneMs = 0;           // when that position arrived
+String showQueue;                  // text waiting to be shown (from /api/speak)
 
 // what the OLED face shows
 String screenText;              // reply / error text that scrolls on the OLED
@@ -149,133 +136,7 @@ bool ollamaOnline = false;
 String ollamaModels = "[]";    // JSON array of model names
 uint32_t lastHealthCheck = 0;
 
-// ------------------------------------------------------------------- audio --
-DacOutput *dac = nullptr;
-ESP8266SAM *sam = nullptr;
-AudioGeneratorWAV *wav = nullptr;
-AudioFileSourceHTTPStream *wavSrc = nullptr;
-
 void ledSet(bool on) { digitalWrite(STATUS_LED_PIN, on ? HIGH : LOW); }
-
-// Turn AI text into something a speech engine can read.
-String cleanForSpeech(const String &in) {
-  String out;
-  out.reserve(in.length());
-  for (size_t i = 0; i < in.length(); i++) {
-    uint8_t c = in[i];
-    if (c >= 0x80) {                       // skip UTF-8 multibyte (emoji etc.)
-      while (i + 1 < in.length() && ((uint8_t)in[i + 1] & 0xC0) == 0x80) i++;
-      out += ' ';
-      continue;
-    }
-    if (c == '*' || c == '#' || c == '`' || c == '_' || c == '|' || c == '>' || c == '~') continue;
-    if (c == '\n' || c == '\r' || c == '\t') { out += ". "; continue; }
-    if (c == '&') { out += " and "; continue; }
-    if (c == '%') { out += " percent"; continue; }
-    if (c == '+') { out += " plus "; continue; }
-    if (c == '=') { out += " equals "; continue; }
-    out += (char)c;
-  }
-  // collapse repeated spaces / dots
-  while (out.indexOf("  ") >= 0) out.replace("  ", " ");
-  while (out.indexOf(". .") >= 0) out.replace(". .", ".");
-  out.trim();
-  return out;
-}
-
-/**
- * SAM only knows letters, digits and simple punctuation. Any other character
- * makes it fail AND leak ~4 KB of memory (a bug in the library) - after a few
- * answers the ESP32 would run out of memory and restart. Replace them with
- * spaces (same length, so the subtitle positions stay correct).
- */
-String samSafe(const String &in) {
-  String out = in;
-  for (size_t i = 0; i < out.length(); i++) {
-    char c = out[i];
-    bool ok = isalnum((unsigned char)c) || c == ' ' || c == '.' || c == ',' || c == '?' ||
-              c == '!' || c == '\'' || c == ';' || c == ':' || c == '-';
-    if (!ok) out.setCharAt(i, ' ');
-  }
-  return out;
-}
-
-// SAM speaks short phrases of 3-5 words: long phrases can overflow its
-// internal buffers, and short ones keep the subtitle highlight in sync.
-void sayWithSam(const String &text) {
-  const size_t MAXC = 32;
-  size_t start = 0;
-  while (start < text.length() && !stopAudio) {
-    size_t end = min(text.length(), start + MAXC);
-    if (end < text.length()) {
-      int cut = -1;
-      for (int i = end; i > (int)start + 8; i--) {        // prefer to stop at punctuation
-        char ch = text[i - 1];
-        if (ch == '.' || ch == '!' || ch == '?' || ch == ',' || ch == ';' || ch == ':') { cut = i; break; }
-      }
-      if (cut < 0) for (int i = end; i > (int)start; i--) if (text[i] == ' ') { cut = i; break; }
-      if (cut > 0) end = cut;
-    }
-    String part = text.substring(start, end);
-    int lead = 0;
-    while (lead < (int)part.length() && part[lead] == ' ') lead++;
-    part.trim();
-    bool hasLetters = false;
-    for (size_t i = 0; i < part.length(); i++) if (isalnum((unsigned char)part[i])) { hasLetters = true; break; }
-    if (hasLetters) {
-      if (ESP.getFreeHeap() < 24000) {                     // never speak into an out-of-memory crash
-        Serial.printf("[sam] low memory (%u), skipping speech\n", ESP.getFreeHeap());
-        break;
-      }
-      subChunkStart = start + lead;
-      subChunkLen = part.length();
-      subChunkMs = millis();
-      // time limit for this phrase: if anything goes wrong it can't freeze the ESP32
-      dac->deadline = millis() + (uint32_t)(part.length() * samMsPerChar * 3) + 3000;
-      if (!sam->Say(dac, samSafe(part).c_str())) Serial.println("[sam] could not say: " + part);
-      uint32_t took = millis() - subChunkMs;
-      if (dac->drop) break;                                // stopped or DAC stalled
-      if (took > 150 && !stopAudio && took < dac->deadline - subChunkMs) {   // learn the real speed
-        float m = (float)took / part.length();
-        samMsPerChar = constrain(samMsPerChar * 0.6f + m * 0.4f, 30.f, 200.f);
-      }
-    }
-    start = end;
-  }
-  dac->deadline = 0;
-  subChunkLen = 0;
-  dac->stop();
-}
-
-String urlEncode(const String &s) {
-  static const char *hex = "0123456789ABCDEF";
-  String e;
-  e.reserve(s.length() * 3);
-  for (size_t i = 0; i < s.length(); i++) {
-    uint8_t c = (uint8_t)s[i];               // unsigned: no sprintf overflow on UTF-8
-    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') e += (char)c;
-    else if (c == ' ') e += '+';
-    else { e += '%'; e += hex[c >> 4]; e += hex[c & 15]; }
-  }
-  return e;
-}
-
-bool startPcTts(const String &text) {
-  String url = "http://" + cfg.ollamaHost + ":" + String(cfg.ttsPort) + "/tts?text=" + urlEncode(text);
-  wavSrc = new AudioFileSourceHTTPStream(url.c_str());
-  wav = new AudioGeneratorWAV();
-  if (wav->begin(wavSrc, dac)) return true;
-  Serial.println("[tts] PC TTS server not reachable, falling back to SAM");
-  delete wav; wav = nullptr;
-  delete wavSrc; wavSrc = nullptr;
-  return false;
-}
-
-void finishPcTts() {
-  if (wav) { wav->stop(); delete wav; wav = nullptr; }
-  if (wavSrc) { delete wavSrc; wavSrc = nullptr; }   // fixes the leak in v1
-  dac->stop();
-}
 
 // ------------------------------------------------------------------ ollama --
 void checkOllama() {
@@ -309,7 +170,7 @@ void checkOllama() {
 }
 
 // Runs the request that the phone sent. Body format:
-// { "messages":[{"role":"user","content":"..."}...], "speak":true }
+// { "messages":[{"role":"user","content":"..."}...], "speak":true }   (speak = show on the OLED)
 bool runChat(const String &body, String &reply, Usage &u, String &err) {
   JsonDocument in;
   if (deserializeJson(in, body)) { err = "Bad JSON from app"; return false; }
@@ -387,7 +248,7 @@ FaceInfo getFaceInfo() {
   f.wifiOk = WiFi.status() == WL_CONNECTED;
   f.rssi = f.wifiOk ? WiFi.RSSI() : 0;
   if (f.wifiOk) strlcpy(f.ip, WiFi.localIP().toString().c_str(), sizeof f.ip);
-  f.audioLevel = dac ? dac->level() : 0;
+  f.s = sense::get();
   if (now < 60000 && resetReasonText()[0]) snprintf(f.note, sizeof f.note, "restarted: %s", resetReasonText());
 
   FaceMode m;
@@ -411,14 +272,10 @@ FaceInfo getFaceInfo() {
   if (m == FACE_LISTENING || m == FACE_THINKING) strlcpy(f.heard, heardText.c_str(), sizeof f.heard);
   if (m == FACE_SPEAKING && subText.length()) {
     strlcpy(f.sub, subText.c_str(), sizeof f.sub);
-    if (subStreamPos >= 0) f.subPos = subStreamPos;
-    else if (subChunkLen > 0) {
-      // the sound comes out ~0.3 s after it is made (audio buffers), so lag the highlight too
-      int32_t ms = (int32_t)(now - subChunkMs) - 300;
-      int done = ms > 0 ? (int)(ms / samMsPerChar) : 0;
-      f.subPos = subChunkStart + constrain(done, 0, subChunkLen - 1);
-    } else f.subPos = 0;
-    f.subPos = constrain(f.subPos, 0, (int)strlen(f.sub) - 1);
+    int len = strlen(f.sub);
+    if (subPhonePos >= 0 && now - subPhoneMs < 4000) f.subPos = subPhonePos;   // follows the phone voice
+    else f.subPos = (int)((now - subStartMs) / max<uint16_t>(cfg.readMsPerChar, 10));
+    f.subPos = constrain(f.subPos, 0, len - 1);
   }
   UNLOCK();
   return f;
@@ -505,7 +362,6 @@ void setupRoutes() {
     d["heap"] = ESP.getFreeHeap();
     d["min_heap"] = ESP.getMinFreeHeap();
     d["reset"] = resetReasonText();
-    d["dac_stalls"] = dac ? (uint32_t)dac->stalls : 0;
     d["uptime_s"] = millis() / 1000;
     d["state"] = stateName(state);
     d["ollama_online"] = ollamaOnline;
@@ -518,13 +374,21 @@ void setupRoutes() {
     c["max_words"] = cfg.maxWords;
     c["num_predict"] = cfg.numPredict;
     c["num_ctx"] = cfg.numCtx;
-    c["voice_mode"] = cfg.voiceMode;
-    c["tts_port"] = cfg.ttsPort;
-    c["volume"] = cfg.volume;
+    c["read_ms_per_char"] = cfg.readMsPerChar;
     JsonObject s = d["session"].to<JsonObject>();
     s["requests"] = sessionRequests;
     s["prompt_tokens"] = sessionPrompt;
     s["completion_tokens"] = sessionCompletion;
+    SenseInfo si = sense::get();
+    JsonObject so = d["sensors"].to<JsonObject>();
+    so["ultrasonic"] = si.ultraOk;
+    so["two_sensors"] = si.hasLR;
+    so["distance_cm"] = si.distCm;
+    so["person"] = si.present;
+    so["ir"] = si.irOk;
+    so["petting"] = si.petting;
+    so["pets"] = si.pets;
+    so["love"] = si.love;
     UNLOCK();
     sendJson(r, 200, d);
   });
@@ -537,14 +401,13 @@ void setupRoutes() {
     if (deserializeJson(peek, body)) return sendError(r, 400, "Invalid JSON");
     LOCK();
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy, still thinking"); }
-    stopAudio = true; if (dac) dac->drop = true;                       // a new question interrupts speech
     faceOverrideUntil = 0;                  // stop showing "listening"
     {
       JsonArray ms = peek["messages"].as<JsonArray>();
       if (!ms.isNull() && ms.size()) heardText = asciiOnly(ms[ms.size() - 1]["content"] | "").substring(0, 190);
     }
     pendingBody = body;
-    pendingSpeak = peek["speak"] | true;
+    pendingShow = peek["speak"] | true;
     uint32_t id = ++jobId;
     state = ST_THINKING;
     lastReply = ""; lastError = "";
@@ -567,16 +430,37 @@ void setupRoutes() {
     sendJson(r, 200, d);
   });
 
-  // Speak any text on the speaker: {"text":"hello"}
+  // Show any text on the OLED like subtitles: {"text":"hello"}
+  // (the app sends the answer here while the phone reads it out loud)
   server.on("/api/speak", HTTP_POST, [](AsyncWebServerRequest *r) {
     JsonDocument in;
     if (deserializeJson(in, bodyOf(r)) || !in["text"].is<const char *>()) return sendError(r, 400, "Need {text}");
     LOCK();
     if (state == ST_THINKING) { UNLOCK(); return sendError(r, 409, "Busy"); }
-    stopAudio = true; if (dac) dac->drop = true;
-    speakQueue = in["text"].as<String>();
-    screenText = asciiOnly(speakQueue).substring(0, 150);
+    showQueue = in["text"].as<String>();
+    if (showQueue.isEmpty()) showQueue = " ";
+    screenText = asciiOnly(showQueue).substring(0, 150);
     faceOverrideUntil = 0;
+    UNLOCK();
+    r->send(200, "application/json", "{\"ok\":true}");
+  }, nullptr, collectBody);
+
+  // The phone tells how far it has read: {"pos":120,"len":300} (or {"done":true})
+  server.on("/api/subpos", HTTP_POST, [](AsyncWebServerRequest *r) {
+    JsonDocument in;
+    if (deserializeJson(in, bodyOf(r))) return sendError(r, 400, "Invalid JSON");
+    LOCK();
+    if (state == ST_SPEAKING) {
+      if (in["done"] | false) {
+        subPhonePos = -1;
+        subStartMs = millis() - (uint32_t)subText.length() * cfg.readMsPerChar;   // jump to the end
+      } else {
+        int pos = in["pos"] | 0, len = in["len"] | 0;
+        if (len > 0) pos = (int)((int64_t)pos * subText.length() / len);   // phone text has emojis etc.
+        subPhonePos = constrain(pos, 0, max(0, (int)subText.length() - 1));
+        subPhoneMs = millis();
+      }
+    }
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
@@ -609,8 +493,8 @@ void setupRoutes() {
 
   server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest *r) {
     LOCK();
-    stopAudio = true; if (dac) dac->drop = true;
-    speakQueue = "";
+    showQueue = "";
+    if (state == ST_SPEAKING) state = ST_IDLE;
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   });
@@ -627,11 +511,8 @@ void setupRoutes() {
     if (in["max_words"].is<int>())    cfg.maxWords = constrain(in["max_words"].as<int>(), 5, 300);
     if (in["num_predict"].is<int>())  cfg.numPredict = constrain(in["num_predict"].as<int>(), 16, 1024);
     if (in["num_ctx"].is<int>())      cfg.numCtx = (in["num_ctx"].as<int>() <= 0 ? 0 : constrain(in["num_ctx"].as<int>(), 512, 32768));
-    if (in["voice_mode"].is<int>())   cfg.voiceMode = in["voice_mode"].as<int>() ? 1 : 0;
-    if (in["tts_port"].is<int>())     cfg.ttsPort = in["tts_port"];
-    if (in["volume"].is<float>())     cfg.volume = constrain(in["volume"].as<float>(), 0.0f, 4.0f);
+    if (in["read_ms_per_char"].is<int>()) cfg.readMsPerChar = constrain(in["read_ms_per_char"].as<int>(), 20, 300);
     saveSettings();
-    if (dac) dac->SetGain(cfg.volume);
     lastHealthCheck = 0;                    // re-check Ollama with the new host
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
@@ -647,7 +528,7 @@ void setupRoutes() {
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(DEVICE_HOSTNAME);
-  WiFi.setSleep(false);                      // faster replies, no audio dropouts
+  WiFi.setSleep(false);                      // faster replies
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("[wifi] connecting");
@@ -671,11 +552,8 @@ void setup() {
   bootMs = millis();
   loadSettings();
 
-  dac = new DacOutput();
   oledBegin();                 // boot animation runs while WiFi connects
-  dac->SetGain(cfg.volume);
-  sam = new ESP8266SAM();
-  sam->SetVoice(ESP8266SAM::VOICE_SAM);
+  sensorsBegin();              // ultrasonic + IR
 
   connectWiFi();
   if (MDNS.begin(DEVICE_HOSTNAME)) MDNS.addService("http", "tcp", 80);
@@ -686,48 +564,38 @@ void setup() {
 
   checkOllama();
   Serial.printf("[ollama] %s at %s:%u\n", ollamaOnline ? "online" : "OFFLINE", cfg.ollamaHost.c_str(), cfg.ollamaPort);
-  speakQueue = "Voice assistant ready.";
 }
 
 // -------------------------------------------------------------------- loop --
-void speakNow(const String &raw) {
-  String text = cleanForSpeech(raw);
-  if (text.isEmpty()) return;
+/** Show text on the OLED word by word (state SPEAKING until it has been read). */
+void showNow(const String &raw) {
+  String text = asciiOnly(raw);
   LOCK();
-  state = ST_SPEAKING; stopAudio = false;
-  dac->drop = false; dac->deadline = 0;
   faceOverrideUntil = 0;
+  if (text.isEmpty()) { if (state == ST_SPEAKING) state = ST_IDLE; UNLOCK(); return; }
   subText = text.substring(0, 700);
-  subChunkLen = 0; subStreamPos = -1;
+  subStartMs = millis();
+  subPhonePos = -1;
+  state = ST_SPEAKING;
   UNLOCK();
-  ledSet(true);
-  if (cfg.voiceMode == 1 && startPcTts(text)) return;   // continues in loop()
-  sayWithSam(text);
-  ledSet(false);
-  LOCK(); if (state == ST_SPEAKING) state = ST_IDLE; UNLOCK();
 }
 
 void loop() {
-  // 1) keep a PC-TTS stream playing
-  if (wav) {
-    uint32_t sz = wavSrc ? wavSrc->getSize() : 0;
-    if (sz > 44) {                                   // subtitle follows the audio stream
-      uint32_t pos = wavSrc->getPos();
-      subStreamPos = (int)((uint64_t)(pos > 44 ? pos - 44 : 0) * subText.length() / (sz - 44));
-    }
-    if (stopAudio || dac->drop || !wav->isRunning() || !wav->loop()) {
-      finishPcTts();
-      ledSet(false);
-      LOCK(); if (state == ST_SPEAKING) state = ST_IDLE; UNLOCK();
-    }
-    return;
+  // 1) finished showing the answer? (2.5 s after the last word, or the phone said done)
+  LOCK();
+  if (state == ST_SPEAKING) {
+    uint32_t now = millis();
+    bool phoneActive = subPhonePos >= 0 && now - subPhoneMs < 4000;
+    uint32_t endMs = subStartMs + (uint32_t)subText.length() * cfg.readMsPerChar + 2500;
+    if (!phoneActive && (int32_t)(now - endMs) > 0) state = ST_IDLE;
   }
+  UNLOCK();
 
   // 2) a question from the app?
   LOCK();
   bool haveJob = state == ST_THINKING && pendingBody.length();
   String body = haveJob ? pendingBody : String();
-  bool speak = pendingSpeak;
+  bool show = pendingShow;
   uint32_t myId = jobId;
   pendingBody = "";
   UNLOCK();
@@ -749,7 +617,7 @@ void loop() {
         screenText = asciiOnly(reply).substring(0, 150);
         sessionPrompt += u.promptTokens;
         sessionCompletion += u.completionTokens;
-        state = speak ? ST_SPEAKING : ST_IDLE;
+        state = ST_IDLE;
       } else {
         lastError = err; lastReply = ""; lastUsage = Usage();
         faceOverrideUntil = 0;
@@ -761,21 +629,19 @@ void loop() {
     if (ok) {
       Serial.printf("[ai] %s\n[usage] in %u, out %u, %.1f tok/s, %u ms\n", reply.c_str(),
                     u.promptTokens, u.completionTokens, u.tokensPerSec, u.totalMs);
-      if (speak) speakNow(reply);
+      if (show) showNow(reply);
     } else {
       Serial.println("[error] " + err);
-      if (speak) speakNow("Sorry, I could not reach the A I.");
-      LOCK(); if (state != ST_THINKING) state = ST_ERROR; UNLOCK();
     }
     return;
   }
 
-  // 3) text queued by /api/speak
+  // 3) text sent by /api/speak
   LOCK();
-  String say = speakQueue;
-  speakQueue = "";
+  String say = showQueue;
+  showQueue = "";
   UNLOCK();
-  if (say.length()) { speakNow(say); return; }
+  if (say.length()) { showNow(say); return; }
 
   // 4) housekeeping while idle
   if (millis() - lastHealthCheck > 15000 || lastHealthCheck == 0) {
