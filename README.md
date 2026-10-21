@@ -157,6 +157,16 @@ Other settings in `config.h`:
 3. Allow port **11434** in the firewall (Windows asks the first time — choose *Private networks*).
 4. Test from your phone browser: `http://<PC-IP>:11434` should say *Ollama is running*.
 
+### Move the model to another laptop (no internet needed)
+
+1. On the old PC, double‑click `pc/export_model.bat`. It copies only `qwen2.5:1.5b` (~1 GB) into `pc/ollama-export`.
+2. Copy the whole `pc` folder to a USB stick. Put the Ollama installer on it too if the new laptop has no internet.
+3. On the new laptop:
+   1. Install Ollama.
+   2. Right‑click `pc/import_model.bat` → **Run as administrator**.
+   3. The script copies the model into Ollama and sets `OLLAMA_HOST=0.0.0.0:11434` and `OLLAMA_KEEP_ALIVE=30m`. It also opens port 11434 in the firewall, warns you if the WiFi is set to *Public*, and prints the laptop's IP.
+4. Put the new IP in the app (Settings → PC address → Save & test). Saving also updates the ESP32.
+
 ## 3. ESP32 firmware
 
 Edit `firmware/VoiceAI/config.h`: WiFi name/password, your PC's IP, sensor pins.
