@@ -65,7 +65,8 @@ inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
 }
 const uint16_t BLACK = 0;
 const uint16_t WHITE = 0xFFFF;
-uint16_t TEAL, BLUE, DIM, RED, GREEN, AMBER, NAVY, PINK;
+uint16_t TEAL, BLUE, DIM, RED, GREEN, AMBER, NAVY, PINK, HAT, GOLD;
+bool wizTheme = true;               // wizard hat + magic (set from the app), or robot eyes
 
 inline uint16_t mix(uint16_t a, uint16_t b, float t) {   // blend two colours
   t = constrain(t, 0.f, 1.f);
@@ -151,7 +152,8 @@ void statusBar(const FaceInfo &f) {
   if (f.s.ultraOk && f.s.present && f.s.distCm > 0) {   // how far you are
     char b[12];
     snprintf(b, sizeof b, "%dcm", f.s.distCm);
-    centerText(b, 3, DIM);
+    if (wizTheme) { cv->setTextColor(DIM); cv->setCursor(34, 3); cv->print(b); }   // the hat is in the middle
+    else centerText(b, 3, DIM);
   }
   if (f.s.love >= 10) {                                   // small heart = it likes you
     float r = 2.5f + f.s.love / 40.f;
@@ -166,7 +168,7 @@ void statusBar(const FaceInfo &f) {
 // ----------------------------------------------------------- particles -----
 // Little things that float around the face: hearts when you pet it, sparkles
 // when it says hi or winks.
-enum PKind : uint8_t { P_HEART, P_SPARK };
+enum PKind : uint8_t { P_HEART, P_SPARK, P_BUBBLE, P_DOT };
 struct Particle {
   float x0, y0, vx, vy, size;
   uint32_t born, life;
@@ -213,6 +215,8 @@ void drawParts(uint32_t now) {
     float pop = k < 0.15f ? k / 0.15f : 1;                       // grow in quickly
     uint16_t c = mix(p.kind == P_HEART ? PINK : WHITE, BLACK, k * k);
     if (p.kind == P_HEART) drawHeart(x, y, p.size * pop, c);
+    else if (p.kind == P_BUBBLE) { cv->drawCircle(x, y, (int)(p.size * pop), mix(TEAL, BLACK, k * k)); cv->drawPixel(x - 1, y - 1, WHITE); }
+    else if (p.kind == P_DOT) cv->fillCircle(x, y, max(0, (int)(p.size * (1 - k))), mix(WHITE, BLACK, k * k));
     else drawSpark(x, y, max(1, (int)(p.size * (1 - k) + 1)), c);
   }
 }
@@ -293,6 +297,32 @@ void drawEye(int cx, int cy, float w, float h, uint16_t top, uint16_t bottom, bo
 
 enum Shape { NORMAL, HAPPY, SAD, HEART, SQUEEZE, BLISS, ANGRY };
 
+float hatSquish = 0;    // > 0 while you pet it: the hat gets squashed
+
+/** Pointy wizard hat with a floppy tip, a band and a star (wizard theme). */
+void drawHat(int cx, int brimY, float sc, uint32_t now) {
+  float sq = hatSquish;
+  int bw = (int)(38 * sc), cw = (int)(20 * sc), ch = (int)(30 * sc * (1 - sq * 0.35f));
+  float sway = sinf(now / 600.f) * 2 * sc;
+  int tipX = cx + (int)(10 * sc + sway), tipY = brimY - ch;
+  // cone + floppy tip bending to the right
+  cv->fillTriangle(cx - cw, brimY, cx + cw, brimY, cx + (int)(4 * sc), tipY, HAT);
+  cv->fillTriangle(cx + (int)(4 * sc) - 3, tipY + 3, cx + (int)(4 * sc) + 3, tipY, tipX + (int)(8 * sc), tipY + (int)(7 * sc), HAT);
+  // star on the tip
+  int sx = tipX + (int)(8 * sc), sy = tipY + (int)(8 * sc);
+  cv->drawFastHLine(sx - 2, sy, 5, GOLD); cv->drawFastVLine(sx, sy - 2, 5, GOLD);
+  // band (black line on the white-only screen, gold on colour)
+  cv->drawFastHLine(cx - cw + 3, brimY - 4, 2 * cw - 6, OLED_TYPE == 3 ? BLACK : GOLD);
+  cv->drawFastHLine(cx - cw + 3, brimY - 3, 2 * cw - 6, OLED_TYPE == 3 ? BLACK : GOLD);
+  // little star on the cone
+  int stx = cx - (int)(5 * sc), sty = brimY - ch / 2 - 1;
+  uint16_t sc2 = OLED_TYPE == 3 ? BLACK : GOLD;
+  cv->drawFastHLine(stx - 2, sty, 5, sc2); cv->drawFastVLine(stx, sty - 2, 5, sc2);
+  // brim, with a thin dark gap under it so it doesn't melt into the eyes
+  cv->fillRect(cx - bw, brimY + 3, 2 * bw, 2, BLACK);
+  cv->fillRoundRect(cx - bw, brimY - 1, 2 * bw, 4, 2, HAT);
+}
+
 // animated values, smoothed every frame
 float eyeScale = 1, eyeCy = 54;     // eyes shrink and move up for subtitles
 float converge = 0, tConverge = 0;  // both eyes turn inward = focusing on something close
@@ -302,6 +332,7 @@ int winkEye = -1;                   // 0 / 1 = this eye is winking
 uint32_t winkStart = 0;
 
 void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
+  if (wizTheme) { scale *= 0.92f; centerY += centerY > 45 ? 8 : 6; }
   eyeScale = approach(eyeScale, scale, 0.2f);
   eyeCy = approach(eyeCy, centerY, 0.2f);
   converge = approach(converge, tConverge, 0.15f);
@@ -380,6 +411,7 @@ void drawEyes(Shape shape, uint32_t now, float scale = 1, float centerY = 54) {
       }
     }
   }
+  if (wizTheme) drawHat(64 + (int)((eyeL.lx + eyeR.lx) / 2), cy - (int)(baseH / 2) - 7, sc, now);
 }
 
 void lookAround(uint32_t now, float range = 1) {
@@ -442,12 +474,22 @@ void bootScreen(uint32_t t) {
   // ring that draws itself, then the name fades in
   float p = min(1.f, t / 1200.f);
   int cx = 64, cy = 50, r = 30;
+  if (wizTheme && t > 400) {           // a crescent moon and twinkling stars inside the circle
+    float q = min(1.f, (t - 400) / 700.f);
+    cv->fillCircle(cx - 3, cy, (int)(15 * q), GOLD);
+    cv->fillCircle(cx + 4, cy - 4, (int)(13 * q), BLACK);
+    static const int8_t ST[4][2] = {{12, -12}, {16, 6}, {4, 14}, {-14, -16}};
+    for (int i = 0; i < 4; i++) if (t > 700 + i * 150) {
+      int s2 = 1 + ((t / 200 + i) % 3 == 0);
+      drawSpark(cx + ST[i][0], cy + ST[i][1], s2 + 1, WHITE);
+    }
+  }
   for (int a = 0; a < (int)(360 * p); a += 2) {
     float rad = (a - 90) * DEG_TO_RAD;
     uint16_t c = mix(TEAL, BLUE, a / 360.f);
     cv->fillCircle(cx + cosf(rad) * r, cy + sinf(rad) * r, 2, c);
   }
-  if (t > 500) {
+  if (t > 500 && !wizTheme) {
     float s = min(1.f, (t - 500) / 600.f);
     cv->fillCircle(cx, cy, (int)(12 * s), TEAL);
     cv->fillCircle(cx, cy, (int)(5 * s), BLACK);
@@ -660,7 +702,11 @@ void petScene(const FaceInfo &f, uint32_t now) {
   setEyes(1, sinf(now / 150.f) * 4, -2);             // nuzzles your hand
   drawEyes(pt > 3500 ? BLISS : HAPPY, now, 1.05f, 50);
   blush((int)eyeCy, eyeScale);
-  const char *msg = pt < 1500 ? "hehe~" : pt < 3500 ? "that tickles!" : s.love >= 90 ? "best friends! <3" : "purrr... <3";
+  static const char *WIZ[] = {"hehe, my hat!", "magic tingles!", "pat power +1", "sparkle sparkle!", "so cozy...",
+                              "wand recharged!", "best pats ever!", "Pip is jealous!", "more pats pls~", "warm as star tea"};
+  const char *msg = wizTheme ? WIZ[(s.pets + pt / 1800) % 10]
+                  : pt < 1500 ? "hehe~" : pt < 3500 ? "that tickles!" : s.love >= 90 ? "best friends! <3" : "purrr... <3";
+  if (wizTheme && random(100) < 30) spawn(P_SPARK, random(30, 98), random(20, 50), random(-10, 11), -20, 900, 3, now);
   centerText(msg, 99, PINK);
   loveBar(s.love, 113);
 }
@@ -850,6 +896,110 @@ void emotionScene(const FaceInfo &f, uint32_t now, uint32_t t) {
   if (!strcmp(e, "shy") || !strcmp(e, "love")) blush((int)eyeCy, eyeScale);
 }
 
+
+// ------------------------------------------------------------- spells ------
+// The wizard casts a spell from the app (or decides to by himself).
+const char *spellWords(const char *s) {
+  if (!strcmp(s, "float")) return "Feather-up!";
+  if (!strcmp(s, "rainbow")) return "Arc of colours!";
+  if (!strcmp(s, "snow")) return "Whisper-white!";
+  if (!strcmp(s, "fireworks")) return "Sky-sparks!";
+  if (!strcmp(s, "bubbles")) return "Bubble-bloom!";
+  if (!strcmp(s, "fade")) return "Now you see me..";
+  if (!strcmp(s, "dream")) return "Dream-dust...";
+  return "Stella-sparkla!";
+}
+
+/** Small wand in the corner that waves while casting. */
+void wand(uint32_t t, uint32_t now) {
+  float a = -0.9f + (t < 1200 ? sinf(t / 60.f) * 0.5f : 0);
+  int bx = 112, by = 104, tx = bx + (int)(sinf(a) * 26), ty = by - (int)(cosf(a) * 26);
+  thickLine(bx, by, tx, ty, 3, mix(AMBER, BLACK, 0.3f));
+  int s = 3 + (int)(2 * fabsf(sinf(now / 120.f)));
+  drawSpark(tx, ty, s, GOLD);
+}
+
+void spellScene(const FaceInfo &f, uint32_t now, uint32_t t) {
+  const char *sp = f.spell;
+  statusBar(f);
+  Shape shape = HAPPY;
+  float sc = 1, ly = 0, open = 1;
+  static uint32_t lastFx = 0;
+  bool fx = now - lastFx > 90;
+  if (fx) lastFx = now;
+  if (!strcmp(sp, "float")) {
+    ly = -fabsf(sinf(t / 380.f)) * 10;
+    for (int i = 0; i < 3; i++) {                      // little wind lines under the face
+      int y = 92 + i * 5 + (int)(sinf(now / 200.f + i) * 2);
+      cv->drawFastHLine(44 + i * 6, y, 40 - i * 12, DIM);
+    }
+  } else if (!strcmp(sp, "rainbow")) {
+    float a = min(1.f, t / 600.f);
+    uint16_t rc[5] = {RED, AMBER, GREEN, BLUE, PINK};
+    for (int i = 0; i < 5; i++) {
+      int r = 58 - i * 4;
+      for (int d = 180; d <= 360; d += 3) {
+        float rad = d * DEG_TO_RAD;
+        if ((d - 180) > (int)(180 * a)) break;
+        cv->drawPixel(64 + (int)(cosf(rad) * r), 112 + (int)(sinf(rad) * r), OLED_TYPE == 3 && (i % 2) ? BLACK : rc[i]);
+      }
+    }
+  } else if (!strcmp(sp, "snow")) {
+    if (fx) for (int i = 0; i < 2; i++) spawn(P_DOT, random(0, 128), 12, random(-6, 7), random(18, 34), 3500, random(1, 3), now);
+  } else if (!strcmp(sp, "fireworks")) {
+    static uint32_t lastBoom = 0;
+    if (now - lastBoom > 550) {
+      lastBoom = now;
+      int x = random(20, 108), y = random(18, 50);
+      for (int i = 0; i < 14; i++) { float a2 = i * 2 * PI / 14; spawn(P_SPARK, x, y, cosf(a2) * 40, sinf(a2) * 40, 800, 2, now); }
+    }
+  } else if (!strcmp(sp, "bubbles")) {
+    if (fx && random(100) < 60) spawn(P_BUBBLE, random(10, 118), 128, random(-6, 7), -random(20, 40), 3500, random(3, 7), now);
+  } else if (!strcmp(sp, "fade")) {
+    float p = min(1.f, t / 3000.f);
+    sc = 1 - 0.8f * sinf(PI * p);
+    shape = NORMAL;
+  } else if (!strcmp(sp, "dream")) {
+    open = 0.14f; shape = NORMAL; sleepExtras(now);
+  } else {                                              // starburst
+    shape = NORMAL; open = 1.2f;
+    if (t < 1500 && fx) for (int i = 0; i < 3; i++) {
+      float a2 = random(0, 628) / 100.f;
+      spawn(P_SPARK, 64, 58, cosf(a2) * random(30, 70), sinf(a2) * random(30, 70), 900, random(2, 4), now);
+    }
+    if (t < 300) cv->drawCircle(64, 58, t / 4, GOLD);
+  }
+  lookK = 0.4f;
+  setEyes(open, 0, ly);
+  drawEyes(shape, now, sc, 50);
+  wand(t, now);
+  centerText(spellWords(sp), 117, GOLD);
+}
+
+/** Hourglass icon: [left] 1 = full top, 0 = empty top. */
+void hourglass(int x, int y, float left, uint16_t c) {
+  cv->drawFastHLine(x, y, 9, c); cv->drawFastHLine(x, y + 12, 9, c);
+  cv->drawLine(x + 1, y + 1, x + 4, y + 6, c); cv->drawLine(x + 7, y + 1, x + 4, y + 6, c);
+  cv->drawLine(x + 1, y + 11, x + 4, y + 6, c); cv->drawLine(x + 7, y + 11, x + 4, y + 6, c);
+  int top = (int)(4 * left), bot = 4 - top;
+  if (top > 0) cv->fillTriangle(x + 2, y + 6 - top, x + 6, y + 6 - top, x + 4, y + 6, GOLD);
+  if (bot > 0) cv->fillRect(x + 3, y + 11 - bot, 3, bot, GOLD);
+}
+
+void timeUpScene(const FaceInfo &f, uint32_t now) {
+  statusBar(f);
+  uint32_t t = now - f.timerDoneMs;
+  setEyes(1.25f, 0, -3);
+  drawEyes(NORMAL, now, 1.05f, 50);
+  if ((t / 300) % 2 == 0) centerText("TIME'S UP!", 100, AMBER, 2);
+  static uint32_t lastBoom = 0;
+  if (now - lastBoom > 400) {
+    lastBoom = now;
+    int x = random(16, 112), y = random(16, 40);
+    for (int i = 0; i < 10; i++) { float a = i * 2 * PI / 10; spawn(P_SPARK, x, y, cosf(a) * 35, sinf(a) * 35, 700, 2, now); }
+  }
+}
+
 // --------------------------------------------------------------- frame -----
 FaceMode lastMode = FACE_BOOT;
 
@@ -858,6 +1008,8 @@ void frame(uint32_t now) {
   uint32_t t = now - f.modeSinceMs;
   cv->fillScreen(BLACK);
   resetFace();
+  wizTheme = f.wizard;
+  hatSquish = approach(hatSquish, f.s.petting ? 0.5f + 0.5f * sinf(now / 110.f) : 0, 0.4f);
 
   if (f.mode != lastMode) {
     lastMode = f.mode;
@@ -879,7 +1031,12 @@ void frame(uint32_t now) {
       break;
 
     case FACE_IDLE:
-      idleFace(f, now, t);
+      if (f.timerDoneMs) timeUpScene(f, now);
+      else idleFace(f, now, t);
+      break;
+
+    case FACE_SPELL:
+      spellScene(f, now, t);
       break;
 
     case FACE_LISTENING:
@@ -923,7 +1080,8 @@ void frame(uint32_t now) {
       break;
 
     case FACE_EMOTION:
-      emotionScene(f, now, t);
+      if (f.timerDoneMs) timeUpScene(f, now);
+      else emotionScene(f, now, t);
       break;
 
     case FACE_ERROR:
@@ -942,6 +1100,20 @@ void frame(uint32_t now) {
       spawn(P_HEART, random(10, 118), random(40, 70), 0, -30, 1300, random(3, 5), now);
     }
     blush((int)eyeCy, eyeScale);
+  }
+  // running timer: hourglass + time left at the top right of the eyes
+  if (f.timerLeftMs >= 0 && f.mode != FACE_BOOT && f.mode != FACE_WIFI) {
+    static uint32_t total = 0;
+    static int32_t lastLeft = 0;
+    if (f.timerLeftMs > lastLeft + 2000 || total == 0) total = f.timerLeftMs;   // a new timer
+    lastLeft = f.timerLeftMs;
+    char b[10];
+    uint32_t s = (f.timerLeftMs + 999) / 1000;
+    if (s >= 3600) snprintf(b, sizeof b, "%luh%02lu", (unsigned long)(s / 3600), (unsigned long)(s % 3600 / 60));
+    else snprintf(b, sizeof b, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+    cv->fillRect(62, 0, 42, 13, BLACK);
+    hourglass(64, 0, total ? (float)f.timerLeftMs / total : 1, GOLD);
+    cv->setTextSize(1); cv->setTextColor(GOLD); cv->setCursor(75, 3); cv->print(b);
   }
   drawParts(now);
   flush();
@@ -973,6 +1145,8 @@ inline void oledBegin() {
   AMBER = rgb(240, 180, 90);
   NAVY = rgb(21, 64, 106);
   PINK = rgb(255, 120, 170);
+  HAT = rgb(120, 96, 235);
+  GOLD = rgb(255, 205, 90);
 
 #if OLED_TYPE == 1
   Wire.begin(OLED_SDA, OLED_SCL);

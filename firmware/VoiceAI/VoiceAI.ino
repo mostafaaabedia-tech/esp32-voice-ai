@@ -27,7 +27,7 @@
 #include "sensors.h"
 #include "oled.h"
 
-#define FW_VERSION "3.1.0"
+#define FW_VERSION "4.0.0"
 #define MAX_BODY_BYTES 16384
 
 // loop() runs the AI request; give it more stack than the 8 KB default
@@ -58,6 +58,7 @@ struct Settings {
   uint16_t numPredict;
   uint16_t numCtx;
   uint16_t readMsPerChar;   // how fast the answer subtitles move on the OLED
+  uint8_t theme;            // 1 = wizard (hat + magic), 0 = robot eyes
 } cfg;
 
 Preferences prefs;
@@ -72,6 +73,7 @@ void loadSettings() {
   cfg.numPredict   = prefs.getUShort("npred", DEFAULT_NUM_PREDICT);
   cfg.numCtx       = prefs.getUShort("nctx2", DEFAULT_NUM_CTX);
   cfg.readMsPerChar = prefs.getUShort("readms", DEFAULT_READ_MS_PER_CHAR);
+  cfg.theme        = prefs.getUChar("theme", 1);
   prefs.end();
 }
 
@@ -85,6 +87,7 @@ void saveSettings() {
   prefs.putUShort("npred", cfg.numPredict);
   prefs.putUShort("nctx2", cfg.numCtx);
   prefs.putUShort("readms", cfg.readMsPerChar);
+  prefs.putUChar("theme", cfg.theme);
   prefs.end();
 }
 
@@ -126,6 +129,9 @@ FaceMode faceOverride = FACE_IDLE;  // set by the app (/api/face) e.g. listening
 uint32_t faceOverrideUntil = 0;
 String faceEmotion;             // feeling chosen by the AI companion (/api/face emotion)
 String speakEmotion;            // feeling while the answer is shown (/api/speak emotion)
+String faceSpell;               // spell being cast (/api/face spell)
+uint32_t timerEndMs = 0;        // hourglass timer (/api/timer), 0 = none
+uint32_t timerDoneMs = 0;       // when it ran out
 FaceMode lastFaceMode = FACE_BOOT;
 uint32_t faceSince = 0;
 uint32_t bootMs = 0;
@@ -274,6 +280,14 @@ FaceInfo getFaceInfo() {
   if (m == FACE_LISTENING || m == FACE_THINKING) strlcpy(f.heard, heardText.c_str(), sizeof f.heard);
   if (m == FACE_EMOTION) strlcpy(f.emotion, faceEmotion.c_str(), sizeof f.emotion);
   if (m == FACE_SPEAKING) strlcpy(f.emotion, speakEmotion.c_str(), sizeof f.emotion);
+  if (m == FACE_SPELL) strlcpy(f.spell, faceSpell.c_str(), sizeof f.spell);
+  f.wizard = cfg.theme == 1;
+  if (timerEndMs) {
+    int32_t left = (int32_t)(timerEndMs - now);
+    if (left <= 0) { timerEndMs = 0; timerDoneMs = now ? now : 1; }
+    else f.timerLeftMs = left;
+  }
+  if (timerDoneMs && now - timerDoneMs < 8000) f.timerDoneMs = timerDoneMs;
   if (m == FACE_SPEAKING && subText.length()) {
     strlcpy(f.sub, subText.c_str(), sizeof f.sub);
     int len = strlen(f.sub);
@@ -379,6 +393,7 @@ void setupRoutes() {
     c["num_predict"] = cfg.numPredict;
     c["num_ctx"] = cfg.numCtx;
     c["read_ms_per_char"] = cfg.readMsPerChar;
+    c["theme"] = cfg.theme ? "wizard" : "robot";
     JsonObject s = d["session"].to<JsonObject>();
     s["requests"] = sessionRequests;
     s["prompt_tokens"] = sessionPrompt;
@@ -489,6 +504,11 @@ void setupRoutes() {
     } else if (st == "error") {
       faceOverride = FACE_ERROR; faceOverrideUntil = now + 8000;
       if (hasText) screenText = txt.substring(0, 150);
+    } else if (st == "spell") {
+      // {"state":"spell","spell":"rainbow","ms":4000}: the wizard casts a spell
+      faceSpell = in["spell"] | "starburst";
+      faceOverride = FACE_SPELL;
+      faceOverrideUntil = now + constrain((int)(in["ms"] | 4000), 1000, 20000);
     } else if (st == "emotion") {
       // {"state":"emotion","emotion":"love","ms":5000}: the AI decided how it feels
       faceEmotion = in["emotion"] | "happy";
@@ -497,6 +517,19 @@ void setupRoutes() {
     } else {
       faceOverrideUntil = 0;                       // idle: back to the normal face
     }
+    UNLOCK();
+    r->send(200, "application/json", "{\"ok\":true}");
+  }, nullptr, collectBody);
+
+  // Hourglass timer on the OLED: {"sec":300} starts it, {"sec":0} cancels it
+  server.on("/api/timer", HTTP_POST, [](AsyncWebServerRequest *r) {
+    JsonDocument in;
+    if (deserializeJson(in, bodyOf(r))) return sendError(r, 400, "Invalid JSON");
+    int sec = in["sec"] | 0;
+    LOCK();
+    timerDoneMs = 0;
+    timerEndMs = sec > 0 ? millis() + (uint32_t)min(sec, 86400) * 1000UL : 0;
+    if (timerEndMs == 0 && sec > 0) timerEndMs = 1;
     UNLOCK();
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
@@ -555,6 +588,7 @@ void setupRoutes() {
     if (in["num_predict"].is<int>())  cfg.numPredict = constrain(in["num_predict"].as<int>(), 16, 1024);
     if (in["num_ctx"].is<int>())      cfg.numCtx = (in["num_ctx"].as<int>() <= 0 ? 0 : constrain(in["num_ctx"].as<int>(), 512, 32768));
     if (in["read_ms_per_char"].is<int>()) cfg.readMsPerChar = constrain(in["read_ms_per_char"].as<int>(), 20, 300);
+    if (in["theme"].is<const char *>()) cfg.theme = strcmp(in["theme"].as<const char *>(), "robot") ? 1 : 0;
     saveSettings();
     lastHealthCheck = 0;                    // re-check Ollama with the new host
     UNLOCK();
