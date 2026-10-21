@@ -163,7 +163,8 @@ private fun App(vm: MainViewModel) {
     }
 
     fun startListening() {
-        if (!voice.available) { vm.toast = "No speech service. Install or update the Google app."; return }
+        voice.offline = vm.settings.offlineListen
+        if (!voice.available) { vm.toast = "No speech service. Turn on the offline voice in Settings, or install the Google app."; return }
         heard = ""; level = 0f; processing = false; listening = true
         vm.phoneVoice.stop()                                               // she stops talking when you start
         vm.face("listening")

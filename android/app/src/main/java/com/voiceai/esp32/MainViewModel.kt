@@ -99,6 +99,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         phoneVoice.onStart = { if (screen == Screen.COMPANION) companion.voiceStart() }
         phoneVoice.onWord = { companion.voiceWord() }
         applyVoice()
+        com.voiceai.esp32.voice.OfflineEngine.load(app)        // built-in speech, no internet needed
         viewModelScope.launch {
             while (isActive) {
                 if (!busy) refreshStatus()
@@ -120,6 +121,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         phoneVoice.pitch = settings.voicePitch
         phoneVoice.rate = settings.voiceRate
         phoneVoice.voiceName = settings.voiceName
+        phoneVoice.offline = settings.offlineSpeak
+        phoneVoice.offlineVoice = settings.offlineVoice
+    }
+
+    /** Switch between the wizard and Nova: their own name, colours, voice and OLED theme. */
+    fun setCharacter(c: com.voiceai.esp32.data.CompanionType) {
+        val s = settings
+        updateSettings(s.copy(character = c, companionName = c.defName, hairColor = c.hair, eyeColor = c.eyes, offlineVoice = c.voice, voicePitch = c.pitch))
+        pushTheme()
+    }
+
+    /** Tell the ESP32 which face theme to draw (wizard hat or plain robot eyes). */
+    fun pushTheme() {
+        val host = settings.espHost
+        if (host.isBlank()) return
+        val theme = if (settings.character == com.voiceai.esp32.data.CompanionType.WIZARD) "wizard" else "robot"
+        viewModelScope.launch { runCatching { Api.espConfig(host, JSONObject().put("theme", theme)) } }
     }
 
     /** The AI companion that lives in the app and the ESP32. */
@@ -134,11 +152,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Read a reply out loud on the phone and show it (with a feeling) on the ESP32 screen. */
-    fun speakAnswer(text: String, emotion: String? = null) {
+    fun speakAnswer(text: String, emotion: String? = null, showOnEsp: Boolean = true) {
         val s = settings
         val spoken = plain(text)
-        if (s.espHost.isNotBlank()) viewModelScope.launch { runCatching { Api.espShow(s.espHost, spoken, emotion) } }
-        syncSubs = s.route.onPhone && s.espHost.isNotBlank()
+        if (showOnEsp && s.espHost.isNotBlank()) viewModelScope.launch { runCatching { Api.espShow(s.espHost, spoken, emotion) } }
+        syncSubs = showOnEsp && s.route.onPhone && s.espHost.isNotBlank()
         if (s.route.onPhone) phoneVoice.speak(spoken, s.lang)
     }
 
@@ -172,6 +190,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (s.espHost.isNotBlank()) {
             try {
                 device = Api.espInfo(s.espHost)
+                if (!deviceOnline) { deviceOnline = true; pushTheme() }   // just connected: send the face theme
                 deviceOnline = true
             } catch (e: Exception) {
                 deviceOnline = false

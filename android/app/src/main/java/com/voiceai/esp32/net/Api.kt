@@ -125,6 +125,16 @@ object Api {
         runCatching { request("POST", base(host) + "/api/face", body, 2500) }
     }
 
+    /** Cast a spell on the OLED (starburst, float, rainbow, snow, fireworks, bubbles, fade, dream). */
+    suspend fun espSpell(host: String, spell: String, ms: Int = 4000) {
+        runCatching { request("POST", base(host) + "/api/face", JSONObject().put("state", "spell").put("spell", spell).put("ms", ms), 2000) }
+    }
+
+    /** Hourglass timer on the OLED: [sec] > 0 starts it, 0 cancels it. */
+    suspend fun espTimer(host: String, sec: Int) {
+        runCatching { request("POST", base(host) + "/api/timer", JSONObject().put("sec", sec), 2000) }
+    }
+
     /** The companion decided how she feels: show it on the OLED for [ms]. */
     suspend fun espEmotion(host: String, emotion: String, ms: Int = 4000) {
         runCatching { request("POST", base(host) + "/api/face", JSONObject().put("state", "emotion").put("emotion", emotion).put("ms", ms), 2000) }

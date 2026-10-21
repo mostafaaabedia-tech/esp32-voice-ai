@@ -24,6 +24,17 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
+      # offline speech engine + voice packs (not stored in git, ~120 MB)
+      - uses: actions/cache@v4
+        with:
+          path: |
+            android/app/libs
+            android/app/src/main/assets/asr
+            android/app/src/main/assets/tts
+          key: offline-models-${{ hashFiles('android/fetch_models.sh') }}
+      - name: Get offline voice models
+        run: bash android/fetch_models.sh
+
       - name: Build APK
         shell: bash
         working-directory: android
@@ -40,17 +51,21 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: VoiceAI-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/*.apk
 
       # Publish on the "apk" branch: github.com/<you>/esp32-voice-ai/raw/apk/VoiceAI.apk
       - name: Publish APK to apk branch
         if: github.ref == 'refs/heads/main'
         run: |
-          mkdir -p /tmp/out && cp android/app/build/outputs/apk/debug/app-debug.apk /tmp/out/VoiceAI.apk
+          mkdir -p /tmp/out
+          # VoiceAI.apk = most phones (64-bit). VoiceAI-32bit.apk = older / cheaper phones.
+          cp android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk /tmp/out/VoiceAI.apk
+          cp android/app/build/outputs/apk/debug/app-armeabi-v7a-debug.apk /tmp/out/VoiceAI-32bit.apk
+          ls -la /tmp/out
           cd /tmp/out
           git init -q -b apk
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add VoiceAI.apk
+          git add VoiceAI.apk VoiceAI-32bit.apk
           git commit -qm "VoiceAI APK from ${GITHUB_SHA::7}"
           git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" apk

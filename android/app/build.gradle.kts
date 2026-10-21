@@ -12,13 +12,36 @@ android {
         applicationId = "com.voiceai.esp32"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "6.0"
+        versionCode = 12
+        versionName = "7.0"
     }
 
     buildTypes {
+        // shrink the app code (the offline voice models make the APK big enough)
+        debug {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    // one APK per phone type, each one smaller than a universal APK
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true          // compressed native libraries = smaller download
+            excludes += listOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
         }
     }
     compileOptions {
@@ -45,4 +68,6 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // offline speech: sherpa-onnx (downloaded by fetch_models.sh)
+    implementation(files("libs/sherpa-onnx.aar"))
 }

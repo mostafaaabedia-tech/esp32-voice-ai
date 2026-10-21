@@ -14,6 +14,7 @@ class Store(context: Context) {
     // ---------------------------------------------------------------- settings
     fun loadSettings(): AppSettings {
         val d = AppSettings()
+        val fresh = !prefs.contains("character")       // first start of version 7: meet the wizard
         return AppSettings(
             espHost = prefs.getString("espHost", d.espHost) ?: d.espHost,
             pcHost = prefs.getString("pcHost", d.pcHost) ?: d.pcHost,
@@ -30,16 +31,21 @@ class Store(context: Context) {
             temperature = prefs.getFloat("temperature", d.temperature),
             textScale = prefs.getFloat("textScale", d.textScale),
             handsFree = prefs.getBoolean("handsFree", d.handsFree),
-            companionName = prefs.getString("cName", d.companionName) ?: d.companionName,
+            character = runCatching { CompanionType.valueOf(prefs.getString("character", d.character.name)!!) }.getOrDefault(d.character),
+            companionName = if (fresh) d.companionName else prefs.getString("cName", d.companionName) ?: d.companionName,
             userName = prefs.getString("uName", d.userName) ?: d.userName,
             personality = runCatching { Personality.valueOf(prefs.getString("cPers", d.personality.name)!!) }.getOrDefault(d.personality),
             chattiness = runCatching { Chattiness.valueOf(prefs.getString("cChat", d.chattiness.name)!!) }.getOrDefault(d.chattiness),
-            hairColor = prefs.getString("cHair", d.hairColor) ?: d.hairColor,
-            eyeColor = prefs.getString("cEyes", d.eyeColor) ?: d.eyeColor,
-            voicePitch = prefs.getFloat("vPitch", d.voicePitch),
+            hairColor = if (fresh) d.hairColor else prefs.getString("cHair", d.hairColor) ?: d.hairColor,
+            eyeColor = if (fresh) d.eyeColor else prefs.getString("cEyes", d.eyeColor) ?: d.eyeColor,
+            hatColor = prefs.getString("cHat", d.hatColor) ?: d.hatColor,
+            voicePitch = if (fresh) d.voicePitch else prefs.getFloat("vPitch", d.voicePitch),
             voiceRate = prefs.getFloat("vRate", d.voiceRate),
             voiceName = prefs.getString("vName", d.voiceName) ?: d.voiceName,
             talkMode = prefs.getBoolean("talkMode", d.talkMode),
+            offlineListen = prefs.getBoolean("offListen", d.offlineListen),
+            offlineSpeak = prefs.getBoolean("offSpeak", d.offlineSpeak),
+            offlineVoice = prefs.getInt("offVoice", d.offlineVoice),
         )
     }
 
@@ -70,6 +76,11 @@ class Store(context: Context) {
             .putFloat("vRate", s.voiceRate)
             .putString("vName", s.voiceName)
             .putBoolean("talkMode", s.talkMode)
+            .putString("character", s.character.name)
+            .putString("cHat", s.hatColor)
+            .putBoolean("offListen", s.offlineListen)
+            .putBoolean("offSpeak", s.offlineSpeak)
+            .putInt("offVoice", s.offlineVoice)
             .apply()
     }
 

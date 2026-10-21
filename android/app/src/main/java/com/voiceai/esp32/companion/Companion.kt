@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewModelScope
 import com.voiceai.esp32.MainViewModel
+import com.voiceai.esp32.data.CompanionType
 import com.voiceai.esp32.data.Sensors
 import com.voiceai.esp32.data.Store
 import com.voiceai.esp32.net.Api
@@ -51,6 +52,12 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
     var emotion by mutableStateOf("neutral"); private set
     val memories = mutableStateListOf<String>().apply { addAll(store.loadMemories()) }
     val talk = mutableStateListOf<Pair<String, String>>().apply { addAll(store.loadTalk()) }
+    /** Running timer: when it ends (0 = none). */
+    var timerEnd by mutableStateOf(0L); private set
+    /** The character couldn't be drawn (old WebView): shown as a message. */
+    var avatarProblem by mutableStateOf<String?>(null)
+    var avatarReady by mutableStateOf(false)
+    private var timerJob: Job? = null
 
     /** JavaScript commands for the avatar (collected by the screen's WebView). */
     val js = MutableSharedFlow<String>(extraBufferCapacity = 64)
@@ -73,7 +80,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
 
     private fun now() = System.currentTimeMillis()
     private fun who() = vm.settings.userName.ifBlank { "your friend" }
-    private val name get() = vm.settings.companionName.ifBlank { "Nova" }
+    private val name get() = vm.settings.companionName.ifBlank { vm.settings.character.defName }
+    private val wizard get() = vm.settings.character == CompanionType.WIZARD
 
     // ------------------------------------------------------------ lifecycle --
     /** True while the companion screen is on screen and the app is open. */
@@ -108,7 +116,13 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         val s = vm.settings
         val se = sensors
         val hour = LocalDateTime.now().hour
+        val sky = when (hour) {
+            in 6..16 -> JSONArray(listOf("#28306e", "#4c4a9c", "#8c79c9"))
+            in 17..19 -> JSONArray(listOf("#1d1a4a", "#58337a", "#c27a9a"))
+            else -> JSONArray(listOf("#0c0a26", "#1e1a52", "#3a2c72"))
+        }
         val o = JSONObject()
+            .put("character", if (wizard) "wizard" else "nova").put("hat", s.hatColor).put("sky", sky)
             .put("speaking", speaking).put("listening", listening).put("thinking", thinking)
             .put("petting", se?.petting == true).put("love", se?.love ?: 35)
             .put("lookX", lookX.toDouble()).put("person", se?.person ?: true)
@@ -156,7 +170,67 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         lastInteraction = now()
         talkJob?.cancel()
         vm.phoneVoice.stop()
+        val local = Magic.local(t, wizard, sensors?.love, vm.pcOnline)
+        if (local != null) {
+            logTalk("user" to t, local.text, local.emotion)
+            doLocal(local, reply = true)
+            return
+        }
         talkJob = scope.launch { respond(user = t) }
+    }
+
+    /** Quick buttons on the screen: fortune, joke, dice, coin. */
+    fun quick(kind: String) {
+        lastInteraction = now()
+        val ask = when (kind) {
+            "fortune" -> "tell my fortune"
+            "joke" -> "tell me a joke"
+            "dice" -> "roll a dice"
+            "coin" -> "flip a coin"
+            else -> return
+        }
+        Magic.local(ask, wizard, sensors?.love, false)?.let { doLocal(it, reply = false) }
+    }
+
+    private fun doLocal(r: Magic.Reply, reply: Boolean) {
+        r.timerSec?.let { if (it > 0) startTimer(it) else cancelTimer() }
+        r.spell?.let { castSpell(it, speak = false) }
+        say(r.emotion, r.text, reply = reply && r.timerSec == null)
+    }
+
+    // --------------------------------------------------------------- spells --
+    /** Cast a spell on the phone and on the OLED. */
+    fun castSpell(id: String, speak: Boolean = true) {
+        val sp = Magic.spell(id) ?: return
+        lastInteraction = now()
+        js.tryEmit("Avatar.spell('${sp.id}')")
+        val host = vm.settings.espHost
+        if (host.isNotBlank()) scope.launch { Api.espSpell(host, sp.id, sp.seconds * 1000) }
+        if (speak) {
+            vm.phoneVoice.stop()
+            say(if (sp.id == "dream") "sleepy" else "excited", "${sp.words} ${sp.line}", reply = false, onEsp = false)
+        }
+    }
+
+    // --------------------------------------------------------------- timers --
+    fun startTimer(sec: Int) {
+        timerJob?.cancel()
+        timerEnd = now() + sec * 1000L
+        val host = vm.settings.espHost
+        if (host.isNotBlank()) scope.launch { Api.espTimer(host, sec) }
+        timerJob = scope.launch {
+            delay(sec * 1000L)
+            timerEnd = 0
+            castSpell("fireworks", speak = false)
+            say("excited", if (wizard) "Ding ding! The sand has run out. Time's up!" else "Time's up!", reply = false)
+        }
+    }
+
+    fun cancelTimer() {
+        timerJob?.cancel()
+        timerEnd = 0
+        val host = vm.settings.espHost
+        if (host.isNotBlank()) scope.launch { Api.espTimer(host, 0) }
     }
 
     // called from the phone voice (any thread)
@@ -243,10 +317,19 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         val host = vm.settings.espHost
         if (fromPhone && host.isNotBlank()) scope.launch { Api.espEmotion(host, "love", 3500) }   // the OLED blushes too
         if (!fromPhone) js.tryEmit("Avatar.hearts(5)")
-        val again = when (petStreak) { 1 -> ""; 2 -> " again"; else -> " for the ${petStreak}th time in a row" }
-        val where = if (fromPhone) "by touching your head on the phone screen" else "(you feel the hand on your IR sensor)"
-        val love = sensors?.love?.let { " Your love for them is $it%." } ?: ""
-        react("pet", "(event: ${who()} is gently petting your head$again $where.$love React in one short, cute sentence.)", cool = 7_000)
+        if (wizard) js.tryEmit("Avatar.hearts(3)")
+        if (speaking || thinking || listening || t - (cooldown["pet"] ?: 0) < 4_000) return
+        if (vm.pcOnline && petStreak % 4 == 0) {
+            // now and then the AI makes up its own reaction
+            val again = " for the ${petStreak}th time in a row"
+            val where = if (fromPhone) "by touching your head on the phone screen" else "(you feel the hand on your IR sensor)"
+            val love = sensors?.love?.let { " Your love for them is $it%." } ?: ""
+            react("pet", "(event: ${who()} is gently petting your head$again $where.$love React in one short, cute sentence.)", cool = 4_000)
+        } else {
+            cooldown["pet"] = t
+            val line = (if (wizard) Magic.WIZARD_PETS else Magic.NOVA_PETS).random()
+            say(if (Random.nextBoolean()) "love" else "happy", line, reply = false)
+        }
     }
 
     // ------------------------------------------------------- decide to talk --
@@ -300,7 +383,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         val s = vm.settings
         val prompt = user ?: event ?: return
         if (s.pcHost.isBlank() || (!vm.pcOnline && user == null)) {
-            if (user != null) say("sad", "I can't reach my brain on your PC. Is Ollama running?", reply = false)
+            if (user != null) Magic.offlineAnswer(wizard).let { say(it.emotion, it.text, reply = false) }
             else canned(key)?.let { (e, line) -> say(e, line, reply = false) }
             return
         }
@@ -331,7 +414,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         } catch (e: Exception) {
             thinking = false
             if (user != null) vm.face("idle")
-            if (user != null) say("sad", "Hmm, my brain didn't answer. ${e.message ?: ""}".trim(), reply = false)
+            if (user != null) Magic.offlineAnswer(wizard).let { say(it.emotion, it.text, reply = false) }
             else canned(key)?.let { (em, line) -> say(em, line, reply = false) } ?: pushState()
             return
         }
@@ -353,15 +436,24 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         scope.launch(Dispatchers.IO) { store.saveTalk(copy) }
         if (key == "initiative") status = "💭 $name decided to talk to you"
         else if (status == "thinking…" || status == "♥") status = ""
+        p.spell?.let { castSpell(it, speak = false); if (key == "initiative") status = "💭 $name decided to cast a spell" }
         say(p.emotion, p.text, reply = user != null || p.text.trimEnd().endsWith("?"))
     }
 
-    private fun say(emotion: String, text: String, reply: Boolean) {
+    private fun logTalk(turn: Pair<String, String>, answer: String, emotion: String) {
+        talk.add(turn)
+        talk.add("assistant" to "[$emotion] $answer")
+        while (talk.size > 60) talk.removeAt(0)
+        val copy = talk.toList()
+        scope.launch(Dispatchers.IO) { store.saveTalk(copy) }
+    }
+
+    private fun say(emotion: String, text: String, reply: Boolean, onEsp: Boolean = true) {
         bubble = text
         lastInteraction = now()
         showEmotion(emotion, (text.length / 14).coerceIn(3, 20) + 2, onEsp = false)   // the OLED gets it with the words
         listenAfter = reply && vm.settings.talkMode
-        vm.speakAnswer(text, emotion)
+        if (onEsp) vm.speakAnswer(text, emotion) else vm.speakAnswer(text, emotion, showOnEsp = false)
         if (!vm.settings.route.onPhone) {                                             // silent: still move her lips
             speaking = true
             pushState()
@@ -414,7 +506,13 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         val se = sensors
         val quietMin = (now() - lastInteraction) / 60_000
         return buildString {
-            append("You are $name, a cute anime-style AI companion girl. You live in a small ESP32 robot with an OLED face on the desk of $w, and in their phone app. ")
+            if (wizard) {
+                append("You are $name, a cheerful young apprentice wizard. You live inside a small ESP32 crystal with an OLED face on the desk of $w, and in their phone app. ")
+                append("Your best friend is Pip, a tiny floating light. You love stars, spells, warm tea and learning new things, and you talk with a playful magical flair. ")
+                append("You can cast these spells: starburst, float, rainbow, snow, fireworks, bubbles, fade, dream. When it fits the moment (not every time), cast one by adding <spell>name</spell> at the end. ")
+            } else {
+                append("You are $name, a cute anime-style AI companion girl. You live in a small ESP32 robot with an OLED face on the desk of $w, and in their phone app. ")
+            }
             append("Your personality: ${s.personality.prompt}. ")
             append("You have your own feelings, opinions and curiosity, and you really care about $w. Talk like a close friend, not like a formal assistant, but you still gladly help with questions, homework and facts. ")
             append("You can feel head pats through an IR sensor and see people come and go with an ultrasonic sensor. ")
@@ -438,7 +536,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
     }
 
     // ---------------------------------------------------------------- parse --
-    data class Parsed(val emotion: String, val text: String, val remember: String?, val quiet: Boolean)
+    data class Parsed(val emotion: String, val text: String, val remember: String?, val quiet: Boolean, val spell: String? = null)
 
     companion object {
         val EMOTIONS = setOf("happy", "love", "shy", "excited", "surprised", "sad", "angry", "sleepy", "thinking", "laugh", "wink", "neutral")
@@ -446,6 +544,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         /** What can be shown / spoken: no tags, no half-written tags while streaming. */
         fun visible(raw: String): String = raw
             .replace(Regex("(?is)<remember>.*?(</remember>|$)"), "")
+            .replace(Regex("(?is)<spell>.*?(</spell>|$)"), "")
             .replace(Regex("\\[[^\\]]{0,24}]"), "")
             .replace(Regex("\\[[^\\]]*$"), "")
             .replace(Regex("<[^>]*$"), "")
@@ -465,7 +564,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
                 else -> "neutral"
             }
             val rem = Regex("(?is)<remember>(.*?)</remember>").find(t)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
-            return Parsed(emo, text, rem, quiet)
+            val spell = Regex("(?is)<spell>\\s*([a-z]+)").find(t)?.groupValues?.get(1)?.lowercase()?.takeIf { Magic.spell(it) != null }
+            return Parsed(emo, text, rem, quiet, spell)
         }
     }
 
@@ -475,7 +575,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         "boop", "tap" -> "surprised" to "Huh? What is it?"
         "arrive" -> "happy" to "Oh, hi! You're here!"
         "too_close" -> "surprised" to "Whoa, you're so close!"
-        "open" -> "happy" to "Hi! I missed you."
+        "open" -> "happy" to if (wizard) "Greetings, friend! Pip and I were waiting for you." else "Hi! I missed you."
+        "initiative" -> null
         else -> null
     }
 }

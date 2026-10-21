@@ -80,6 +80,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.voiceai.esp32.MainViewModel
 import com.voiceai.esp32.Screen
+import com.voiceai.esp32.companion.Magic
+import com.voiceai.esp32.data.CompanionType
+import androidx.compose.foundation.horizontalScroll
 import java.time.LocalTime
 
 private val Pink = Color(0xFFFF6F9F)
@@ -153,6 +156,16 @@ fun CompanionScreen(
             // ---------------------------------------------------- avatar
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 AvatarView(vm, Modifier.fillMaxSize())
+                c.avatarProblem?.let { msg ->
+                    Column(
+                        Modifier.align(Alignment.Center).padding(24.dp).clip(RoundedCornerShape(18.dp))
+                            .background(Color(0xCC140F2E)).padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text("🧙", fontSize = 64.sp)
+                        Text(msg, color = Color.White, fontSize = 14.sp, textAlign = TextAlign.Center, lineHeight = 20.sp)
+                    }
+                }
 
                 // speech bubble
                 val text = when {
@@ -167,6 +180,16 @@ fun CompanionScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (c.status.isNotBlank() && c.status != "listening…" && c.status != "thinking…") Chip(c.status)
+                    if (c.timerEnd > 0) {
+                        var now by remember { mutableStateOf(System.currentTimeMillis()) }
+                        LaunchedEffect(c.timerEnd) { while (true) { now = System.currentTimeMillis(); kotlinx.coroutines.delay(500) } }
+                        val left = ((c.timerEnd - now) / 1000).coerceAtLeast(0)
+                        Text(
+                            "⏳ %d:%02d  ✕".format(left / 60, left % 60), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0x99E7B84A)).clickable { c.cancelTimer() }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         c.sensors?.let { se ->
                             if (se.ultrasonic) Chip(if (se.person && se.distanceCm > 0) "👤 ${se.distanceCm} cm" else "👤 nobody")
@@ -175,6 +198,48 @@ fun CompanionScreen(
                         }
                     }
                 }
+            }
+
+            // ---------------------------------------------------- magic + quick actions
+            var spells by remember { mutableStateOf(false) }
+            var timerDialog by remember { mutableStateOf(false) }
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Action(if (s.character == CompanionType.WIZARD) "✨ Spells" else "✨ Magic", spells) { spells = !spells }
+                Action("🔮 Fortune") { c.quick("fortune") }
+                Action("⏳ Timer") { timerDialog = true }
+                Action("😄 Joke") { c.quick("joke") }
+                Action("🎲 Dice") { c.quick("dice") }
+                Action("🪙 Coin") { c.quick("coin") }
+            }
+            AnimatedVisibility(spells) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Magic.SPELLS.forEach { sp -> Action("${sp.icon} ${sp.label}") { c.castSpell(sp.id) } }
+                }
+            }
+            if (timerDialog) {
+                AlertDialog(
+                    onDismissRequest = { timerDialog = false },
+                    title = { Text("Set a timer") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(1, 3, 5, 10, 15, 25, 30, 60).chunked(4).forEach { row ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    row.forEach { m ->
+                                        TextButton(onClick = { timerDialog = false; c.userSaid("set a timer for $m minutes") }) { Text("$m min") }
+                                    }
+                                }
+                            }
+                            Text("Tip: just say \"set a timer for 7 minutes\".", fontSize = 12.sp)
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = { timerDialog = false }) { Text("Close") } },
+                )
             }
 
             // ---------------------------------------------------- controls
@@ -277,6 +342,19 @@ private fun Bubble(text: String, listening: Boolean, scale: Float, modifier: Mod
 }
 
 @Composable
+private fun Action(text: String, on: Boolean = false, onClick: () -> Unit) {
+    Text(
+        text, color = Color.White, fontSize = 14.sp, maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (on) Lavender.copy(alpha = 0.5f) else Color(0x33FFFFFF))
+            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
 private fun Chip(text: String) {
     Text(
         text, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -331,7 +409,9 @@ private fun AvatarView(vm: MainViewModel, modifier: Modifier) {
         modifier = modifier,
         factory = { ctx ->
             WebView(ctx).apply {
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                layoutParams = android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                setBackgroundColor(android.graphics.Color.rgb(22, 18, 58))      // opaque: transparent WebViews don't draw on some phones
+                settings.domStorageEnabled = true
                 overScrollMode = View.OVER_SCROLL_NEVER
                 isVerticalScrollBarEnabled = false
                 isHorizontalScrollBarEnabled = false
@@ -341,6 +421,14 @@ private fun AvatarView(vm: MainViewModel, modifier: Modifier) {
                 addJavascriptInterface(object {
                     @JavascriptInterface
                     fun touch(kind: String) { main.post { c.onTouch(kind) } }
+
+                    @JavascriptInterface
+                    fun ready() { main.post { c.avatarReady = true; c.avatarProblem = null } }
+
+                    @JavascriptInterface
+                    fun error(msg: String) {
+                        main.post { if (!c.avatarReady) c.avatarProblem = "The character couldn't start: $msg\nPlease update \"Android System WebView\" (Play Store) and restart the app." }
+                    }
                 }, "AndroidBridge")
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView?, url: String?) { c.pushState() }
@@ -354,6 +442,13 @@ private fun AvatarView(vm: MainViewModel, modifier: Modifier) {
     LaunchedEffect(web) {
         val w = web ?: return@LaunchedEffect
         c.js.collect { cmd -> w.evaluateJavascript(cmd, null) }
+    }
+    // nothing drawn after a few seconds: say why instead of a blank screen
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(7000)
+        if (!c.avatarReady && c.avatarProblem == null) {
+            c.avatarProblem = "The character didn't start. Please update \"Android System WebView\" and \"Chrome\" from the Play Store, then restart the app."
+        }
     }
     DisposableEffect(Unit) { onDispose { web?.destroy() } }
 }

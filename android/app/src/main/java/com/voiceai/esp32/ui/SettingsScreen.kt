@@ -57,6 +57,7 @@ import com.voiceai.esp32.data.Persona
 import com.voiceai.esp32.data.Route
 import com.voiceai.esp32.data.Personality
 import com.voiceai.esp32.data.Chattiness
+import com.voiceai.esp32.data.CompanionType
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.size
@@ -260,6 +261,11 @@ private fun StatusRows(vm: MainViewModel) {
     }
 }
 
+private val VOICE_NAMES = listOf(
+    "Voice 1 · calm boy", "Voice 2 · soft girl", "Voice 3 · deep man", "Voice 4 · warm girl",
+    "Voice 5 · young", "Voice 6 · gentle girl", "Voice 7 · lively girl", "Voice 8 · bright girl",
+)
+private val HATS = listOf("#3b2f8f", "#7a1f3d", "#1f5f4a", "#2b2b3a", "#5b3a8f", "#8a6a1f")
 private val HAIR = listOf("#8e74e6", "#f28cb1", "#7b5642", "#2e2c3e", "#e9e4f2", "#f0c46a", "#e0634f", "#5d8de0")
 private val EYES = listOf("#d9577f", "#7a5cff", "#3f8fd8", "#3fae74", "#c8862f", "#b23a48")
 
@@ -268,10 +274,17 @@ private val EYES = listOf("#d9577f", "#7a5cff", "#3f8fd8", "#3fae74", "#c8862f",
 private fun CompanionSettings(vm: MainViewModel) {
     val s = vm.settings
     val c = vm.companion
-    var name by remember { mutableStateOf(s.companionName) }
+    var name by remember(s.character) { mutableStateOf(s.companionName) }
     var you by remember { mutableStateOf(s.userName) }
+    Label("Who lives in your app")
+    Segmented(CompanionType.entries, s.character, { if (it == CompanionType.WIZARD) "🧙 Wizard" else "🌸 Nova" }) { vm.setCharacter(it) }
+    Text(
+        if (s.character == CompanionType.WIZARD) "A young apprentice wizard with a starry hat, a wand and his little light Pip. Casts spells on the phone and on the OLED."
+        else "A cheerful anime-style companion girl.",
+        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp, bottom = 10.dp),
+    )
     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.weight(1f)) { Field("Her name", name, "Nova") { name = it; vm.updateSettings(vm.settings.copy(companionName = it.take(20))) } }
+        Box(Modifier.weight(1f)) { Field("Companion's name", name, s.character.defName) { name = it; vm.updateSettings(vm.settings.copy(companionName = it.take(20))) } }
         Box(Modifier.weight(1f)) { Field("Your name", you, "so she can call you") { you = it; vm.updateSettings(vm.settings.copy(userName = it.take(20))) } }
     }
     Label("Personality")
@@ -290,6 +303,53 @@ private fun CompanionSettings(vm: MainViewModel) {
     Spacer(Modifier.height(8.dp))
     Label("Eyes")
     ColorRow(EYES, s.eyeColor) { vm.updateSettings(vm.settings.copy(eyeColor = it)) }
+    if (s.character == CompanionType.WIZARD) {
+        Spacer(Modifier.height(8.dp))
+        Label("Hat")
+        ColorRow(HATS, s.hatColor) { vm.updateSettings(vm.settings.copy(hatColor = it)) }
+    }
+
+    // ----------------------------------------------------- offline voice
+    Spacer(Modifier.height(16.dp))
+    Label("Voice (works without internet)")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Built-in voice pack", fontSize = 15.sp)
+            Text("8 voices inside the app · ${com.voiceai.esp32.voice.OfflineEngine.ttsStatus}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = s.offlineSpeak, onCheckedChange = { vm.updateSettings(vm.settings.copy(offlineSpeak = it)) })
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Offline listening", fontSize = 15.sp)
+            Text("Built-in English speech recognition · ${com.voiceai.esp32.voice.OfflineEngine.asrStatus}", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = s.offlineListen, onCheckedChange = { vm.updateSettings(vm.settings.copy(offlineListen = it)) })
+    }
+    if (s.offlineSpeak) {
+        Spacer(Modifier.height(6.dp))
+        VOICE_NAMES.forEachIndexed { i, label ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(if (s.offlineVoice == i) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                    .clickable { vm.updateSettings(vm.settings.copy(offlineVoice = i)) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, fontSize = 14.sp, modifier = Modifier.weight(1f),
+                    fontWeight = if (s.offlineVoice == i) FontWeight.SemiBold else FontWeight.Normal)
+                Text("▶ listen", fontSize = 13.sp, color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+                        vm.updateSettings(vm.settings.copy(offlineVoice = i))
+                        vm.speakOnPhone("Hello! I'm ${vm.settings.companionName}. Do you like this voice?")
+                    }.padding(6.dp))
+            }
+        }
+    }
+    if (!s.lang.startsWith("en")) Text(
+        "The built-in voice and listening are English only. For ${s.lang} the phone's own speech service is used (it may need the Google app and its offline language pack).",
+        fontSize = 12.sp, color = Warn, lineHeight = 16.sp, modifier = Modifier.padding(top = 6.dp),
+    )
 
     Spacer(Modifier.height(14.dp))
     Label("Voice pitch  ${"%.2f".format(s.voicePitch)}")
@@ -297,7 +357,7 @@ private fun CompanionSettings(vm: MainViewModel) {
     Label("Voice speed  ${"%.2f".format(s.voiceRate)}")
     Slider(value = s.voiceRate, onValueChange = { vm.updateSettings(vm.settings.copy(voiceRate = (it * 20).toInt() / 20f)) }, valueRange = 0.6f..1.6f)
     val voices = remember(s.lang) { vm.phoneVoice.voices(s.lang) }
-    if (voices.isNotEmpty()) {
+    if (voices.isNotEmpty() && !s.offlineSpeak) {
         var open by remember { mutableStateOf(false) }
         Label("Voice")
         Box {

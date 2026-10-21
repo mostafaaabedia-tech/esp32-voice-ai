@@ -27,6 +27,12 @@ enum class Persona(val label: String, val emoji: String, val prompt: String) {
     COACH("Coach", "💪", "Act as a motivating study and life coach. Be encouraging and give 2-3 practical tips."),
 }
 
+/** Who lives in the app (both are original characters). */
+enum class CompanionType(val label: String, val defName: String, val hair: String, val eyes: String, val voice: Int, val pitch: Float) {
+    WIZARD("Wizard", "Zephyr", "#7a4e33", "#c98a2e", 0, 1.15f),
+    NOVA("Nova", "Nova", "#8e74e6", "#d9577f", 7, 1.05f),
+}
+
 /** How the companion behaves. */
 enum class Personality(val label: String, val prompt: String) {
     CHEERFUL("Cheerful", "bubbly, cheerful and playful; you love little jokes and get excited easily"),
@@ -59,16 +65,22 @@ data class AppSettings(
     val textScale: Float = 1f,
     val handsFree: Boolean = false,
     // companion
-    val companionName: String = "Nova",
+    val character: CompanionType = CompanionType.WIZARD,
+    val companionName: String = "Zephyr",
     val userName: String = "",
     val personality: Personality = Personality.CHEERFUL,
     val chattiness: Chattiness = Chattiness.NORMAL,
-    val hairColor: String = "#8e74e6",
-    val eyeColor: String = "#d9577f",
-    val voicePitch: Float = 1.25f,
+    val hairColor: String = "#7a4e33",
+    val eyeColor: String = "#c98a2e",
+    val hatColor: String = "#3b2f8f",
+    val voicePitch: Float = 1.15f,
     val voiceRate: Float = 1.0f,
     val voiceName: String = "",
     val talkMode: Boolean = true,          // listen again after she answers
+    // offline voice (built into the app)
+    val offlineListen: Boolean = true,
+    val offlineSpeak: Boolean = true,
+    val offlineVoice: Int = 0,             // 0..7
 )
 
 data class Usage(

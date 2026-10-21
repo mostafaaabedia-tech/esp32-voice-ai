@@ -10,11 +10,22 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
-/** Android speech recognition with live partial results. Use from the main thread. */
+/**
+ * Speech input with live partial results. Use from the main thread.
+ * Offline (built-in model, English) by default; the Android / Google recognizer
+ * is used for other languages or when you switch it on in Settings.
+ */
 class VoiceInput(private val context: Context) {
     private var recognizer: SpeechRecognizer? = null
+    private val offlineListener = OfflineListener()
 
-    val available: Boolean get() = SpeechRecognizer.isRecognitionAvailable(context)
+    /** Use the built-in offline recognizer (English). */
+    var offline = true
+
+    private fun useOffline(lang: String) = offline && lang.startsWith("en") && OfflineEngine.asrStatus != "not loaded" &&
+        !OfflineEngine.asrStatus.startsWith("not available")
+
+    val available: Boolean get() = (offline && OfflineEngine.asrReady) || SpeechRecognizer.isRecognitionAvailable(context)
 
     fun start(
         lang: String,
@@ -26,6 +37,10 @@ class VoiceInput(private val context: Context) {
         onSpeechEnd: () -> Unit = {},
     ) {
         cancel()
+        if (useOffline(lang)) {
+            offlineListener.start(onPartial, onLevel, onFinal, onFail, onSpeechStart, onSpeechEnd)
+            return
+        }
         val r = try {
             SpeechRecognizer.createSpeechRecognizer(context)
         } catch (e: Exception) {
@@ -83,6 +98,7 @@ class VoiceInput(private val context: Context) {
 
     /** Stop listening and deliver what was heard (onFinal). */
     fun stop() {
+        if (offlineListener.active) offlineListener.stop()
         recognizer?.stopListening()
     }
 
@@ -93,6 +109,7 @@ class VoiceInput(private val context: Context) {
      * crashes on some phones, so the destroy is done a moment later.
      */
     fun cancel() {
+        offlineListener.cancel()
         val r = recognizer ?: return
         recognizer = null
         runCatching { r.cancel() }
@@ -116,6 +133,17 @@ class PhoneVoice(context: Context) {
     var pitch = 1f
     var rate = 1f
     var voiceName = ""
+    /** Use the built-in voice pack (works without internet). */
+    var offline = true
+    /** Which of the 8 built-in voices. */
+    var offlineVoice = 0
+
+    private val pack = OfflineSpeaker().also { p ->
+        p.onStart = { active = true; onStart?.invoke() }
+        p.onWord = { onWord?.invoke() }
+        p.onProgress = { pos, len -> onProgress?.invoke(pos, len) }
+        p.onDone = { active = false; onDone?.invoke() }
+    }
 
     private val tts = TextToSpeech(context.applicationContext) { status ->
         ready = status == TextToSpeech.SUCCESS
@@ -143,6 +171,13 @@ class PhoneVoice(context: Context) {
     }.getOrDefault(emptyList())
 
     fun speak(text: String, lang: String): Boolean {
+        if (offline && lang.startsWith("en") && OfflineEngine.ttsReady) {
+            if (ready) runCatching { tts.stop() }
+            val t = text.take(4000)
+            length = t.length
+            active = true
+            return pack.speak(t, offlineVoice, pitch, rate)
+        }
         if (!ready) return false
         return runCatching {
             val v = voiceName.takeIf { it.isNotBlank() }?.let { n -> tts.voices.orEmpty().firstOrNull { it.name == n } }
@@ -159,10 +194,11 @@ class PhoneVoice(context: Context) {
 
     fun stop() {
         active = false
+        pack.stop()
         if (ready) tts.stop()
     }
 
-    val speaking: Boolean get() = ready && (active || runCatching { tts.isSpeaking }.getOrDefault(false))
+    val speaking: Boolean get() = active || pack.active || (ready && runCatching { tts.isSpeaking }.getOrDefault(false))
 
     fun shutdown() = tts.shutdown()
 }

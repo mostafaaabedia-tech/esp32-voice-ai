@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Companion</title>
 <style>
-  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+  html, body { margin: 0; height: 100%; background: #16123a; overflow: hidden;
     touch-action: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   canvas { display: block; width: 100%; height: 100%; }
 </style>
@@ -13,8 +13,16 @@
 <body>
 <canvas id="c"></canvas>
 <script>
+// Report problems to the app (shown as a message) instead of a blank screen.
+window.onerror = function (msg, src, line) {
+  try { if (window.AndroidBridge) AndroidBridge.error(String(msg) + ' (line ' + line + ')'); } catch (e) {}
+};
+</script>
+<script>
 // =============================================================================
-//  VoiceAI companion avatar - an original character drawn with canvas.
+//  VoiceAI companion avatar - original characters drawn with canvas:
+//    'wizard' (Zephyr, a young apprentice wizard) and 'nova' (anime girl).
+//  Written in plain ES2015 so it also runs on older Android WebViews.
 //  The Android app controls her with window.Avatar.* and gets touches back
 //  through AndroidBridge.touch(kind).
 // =============================================================================
@@ -42,13 +50,19 @@ const S = {
   petting: false,          // a hand on the ESP32 IR sensor
   love: 30, lookX: 0, person: true, sleepy: false,
   hair: '#8e74e6', eyes: '#d9577f', outfit: '#f6f3fd',
+  character: 'wizard', hat: '#3b2f8f', robe: '#2b3a8c',
+  sky: ['#120e33', '#241d5c', '#45307a'],
 };
+const STARS = [];
+for (let i = 0; i < 46; i++) STARS.push([Math.random(), Math.random(), 0.6 + Math.random() * 2.2, 0.6 + Math.random() * 1.6]);
 const A = {                 // animated values
   t: 0, lx: 0, ly: 0, tlx: 0, tly: 0, nextGlance: 1.5,
   blinkAt: 2, blinkT: -1, mouth: 0, tilt: 0, blush: 0.15, brow: 0, browAng: 0,
   open: 1, wordT: -9, emoT: 0, emoUntil: 0, pokeT: -9, tapT: -9, petHand: 0, handX: 200,
-  touchPet: false, pointer: null, idleT: 6, idle: '', idleStart: -9, bounce: 0,
+  touchPet: false, pointer: null, idleT: 6, idle: '', idleStart: -9, bounce: 0, wispT: 0, ready: false,
 };
+// characters sit a bit lower so the wizard hat fits
+function charOffset() { return S.character === 'wizard' ? 34 : 0; }
 
 // Expressions: eyes, eyebrows, mouth, blush, head tilt, extras
 const EX = {
@@ -80,7 +94,9 @@ const SKIN = '#ffe6da', SKIN2 = '#f5c9b9', LINE = '#3b2a4d';
 
 // -------------------------------------------------------------- particles ---
 const P = [];
-function spawn(kind, x, y, vx, vy, life, size) { if (P.length < 40) P.push({ kind, x, y, vx, vy, life, size, age: 0, ph: Math.random() * 6 }); }
+function spawn(kind, x, y, vx, vy, life, size, color, gy) {
+  if (P.length < 160) P.push({ kind: kind, x: x, y: y, vx: vx, vy: vy, life: life, size: size, color: color || '#fff', gy: gy || 0, age: 0, ph: Math.random() * 6 });
+}
 
 function heartPath(x, y, r) {
   g.beginPath();
@@ -104,7 +120,8 @@ function drawParticles(dt) {
     p.age += dt;
     if (p.age > p.life) { P.splice(i, 1); continue; }
     const k = p.age / p.life, pop = Math.min(1, k / 0.12), fade = 1 - k * k;
-    const x = p.x + p.vx * p.age + Math.sin(p.age * 4 + p.ph) * 6, y = p.y + p.vy * p.age;
+    const wob = (p.kind === 'heart' || p.kind === 'note' || p.kind === 'bubble' || p.kind === 'snow') ? Math.sin(p.age * 4 + p.ph) * 6 : 0;
+    const x = p.x + p.vx * p.age + wob, y = p.y + p.vy * p.age + 0.5 * p.gy * p.age * p.age;
     g.save();
     g.globalAlpha = fade;
     if (p.kind === 'heart') {
@@ -117,6 +134,15 @@ function drawParticles(dt) {
       g.fillStyle = rgba(S.hair, 1); g.font = `bold ${p.size}px sans-serif`; g.fillText(Math.random() < 0 ? '' : (p.ph > 3 ? '♪' : '♫'), x, y);
     } else if (p.kind === 'z') {
       g.fillStyle = '#9fa8d9'; g.font = `bold ${p.size}px sans-serif`; g.fillText('z', x, y);
+    } else if (p.kind === 'gstar') {
+      star(x, y, p.size * pop, 5, 0.45); g.fillStyle = '#ffd166'; g.fill();
+    } else if (p.kind === 'snow') {
+      g.fillStyle = '#ffffff'; g.beginPath(); g.arc(x, y, p.size, 0, 7); g.fill();
+    } else if (p.kind === 'dot') {
+      g.fillStyle = p.color; g.beginPath(); g.arc(x, y, Math.max(0.5, p.size * (1 - k * 0.6)), 0, 7); g.fill();
+    } else if (p.kind === 'bubble') {
+      g.strokeStyle = 'rgba(190,230,255,.9)'; g.lineWidth = 2; g.beginPath(); g.arc(x, y, p.size * pop, 0, 7); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,.7)'; g.beginPath(); g.arc(x - p.size * 0.35, y - p.size * 0.35, p.size * 0.22, 0, 7); g.fill();
     }
     g.restore();
   }
@@ -191,7 +217,7 @@ function facePath(puff) {
 }
 
 function eye(cx, cy, side, o, kind, lx, ly) {
-  const E = S.eyes, lw = 5;
+  const E = S.eyes, boy = S.character === 'wizard', lw = boy ? 4.5 : 5;
   g.save();
   g.lineCap = 'round'; g.lineJoin = 'round';
   // closed / happy shapes
@@ -246,11 +272,13 @@ function eye(cx, cy, side, o, kind, lx, ly) {
   g.moveTo(outer.x + side * 4, outer.y - 2);
   g.bezierCurveTo(cx + side * 30, cy - top - 2, cx - side * 18, cy - top - 4, inner.x, inner.y - 1);
   g.stroke();
-  g.lineWidth = 4;
-  g.beginPath(); g.moveTo(outer.x, outer.y - 4); g.lineTo(outer.x + side * 9, outer.y - 10); g.stroke();
-  // lower lash (outer half)
-  g.lineWidth = 2;
-  g.beginPath(); g.moveTo(outer.x - side * 2, outer.y + 2); g.quadraticCurveTo(cx + side * 16, cy + bot + 2, cx, cy + bot); g.stroke();
+  if (!boy) {
+    g.lineWidth = 4;
+    g.beginPath(); g.moveTo(outer.x, outer.y - 4); g.lineTo(outer.x + side * 9, outer.y - 10); g.stroke();
+    // lower lash (outer half)
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(outer.x - side * 2, outer.y + 2); g.quadraticCurveTo(cx + side * 16, cy + bot + 2, cx, cy + bot); g.stroke();
+  }
   // angry: lid slanting to the middle / half: sleepy lid
   if (kind === 'angry' || kind === 'half') {
     g.fillStyle = SKIN;
@@ -408,11 +436,11 @@ function frontHair(t) {
   g.restore();
 }
 
-function petHand(x, k) {
-  // a soft cartoon hand stroking her head
+function petHand(x, k, y) {
+  // a soft cartoon hand stroking the head
   g.save();
   g.globalAlpha = Math.min(1, k * 3);
-  g.translate(x, 62 + Math.sin(A.t * 9) * 3);
+  g.translate(x, (y || 62) + Math.sin(A.t * 9) * 3);
   g.rotate(-0.15 + Math.sin(A.t * 9) * 0.06);
   g.fillStyle = '#ffe9df'; g.strokeStyle = '#d99c8a'; g.lineWidth = 3;
   g.beginPath(); g.ellipse(0, -10, 44, 30, 0, 0, 7); g.fill(); g.stroke();
@@ -473,10 +501,238 @@ function headFx(kind, t) {
   g.restore();
 }
 
+
+// ------------------------------------------------------------ the wizard ----
+// Zephyr: an original young apprentice wizard. Starry hat and robe, a wand
+// with a glowing star, and Pip, a little light that floats next to him.
+function wizBackHair() {
+  g.fillStyle = shade(S.hair, -0.25);
+  g.beginPath();
+  g.ellipse(200, 205, 122, 112, 0, 0, 7);
+  g.fill();
+  g.beginPath(); g.moveTo(84, 220); g.quadraticCurveTo(86, 300, 110, 316); g.lineTo(290, 316); g.quadraticCurveTo(314, 300, 316, 220); g.fill();
+}
+
+function wizBody(t) {
+  const R = S.robe, breathe = Math.sin(t * 1.6) * 2;
+  g.save(); g.translate(0, -12);
+  g.fillStyle = SKIN; g.fillRect(178, 320, 44, 100);
+  g.fillStyle = SKIN2;
+  g.beginPath(); g.moveTo(178, 345); g.quadraticCurveTo(200, 372, 222, 345); g.lineTo(222, 330); g.lineTo(178, 330); g.fill();
+  // robe
+  const grd = g.createLinearGradient(0, 390, 0, LH + 40);
+  grd.addColorStop(0, shade(R, 0.12)); grd.addColorStop(1, shade(R, -0.3));
+  g.fillStyle = grd;
+  g.beginPath();
+  g.moveTo(46, LH + 50);
+  g.bezierCurveTo(52, 452 + breathe, 96, 410 + breathe, 168, 396 + breathe);
+  g.lineTo(200, 432 + breathe);
+  g.lineTo(232, 396 + breathe);
+  g.bezierCurveTo(304, 410 + breathe, 348, 452 + breathe, 354, LH + 50);
+  g.closePath(); g.fill();
+  g.strokeStyle = shade(R, -0.45); g.lineWidth = 2.5; g.stroke();
+  // silver stars on the robe
+  const pts = [[96, 500], [138, 470], [122, 540], [268, 468], [304, 512], [282, 560], [160, 520], [244, 528], [76, 556], [330, 560]];
+  for (let i = 0; i < pts.length; i++) {
+    const tw = 0.55 + 0.45 * Math.sin(t * 2 + i);
+    g.globalAlpha = tw; star(pts[i][0], pts[i][1] + breathe, 5 + (i % 3), 4, 0.35); g.fillStyle = '#dfe6ff'; g.fill();
+  }
+  g.globalAlpha = 1;
+  // pointed collar
+  g.fillStyle = shade(R, 0.3); g.strokeStyle = shade(R, -0.4); g.lineWidth = 2;
+  for (let side = -1; side <= 1; side += 2) {
+    g.beginPath();
+    g.moveTo(200 + side * 32, 396 + breathe);
+    g.lineTo(200 + side * 64, 404 + breathe);
+    g.lineTo(200 + side * 22, 452 + breathe);
+    g.lineTo(200, 432 + breathe);
+    g.closePath(); g.fill(); g.stroke();
+  }
+  // silver trim down the middle
+  g.strokeStyle = 'rgba(220,228,255,.85)'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(200, 432 + breathe); g.lineTo(200, LH + 40); g.stroke();
+  // moon brooch: glows more when he likes you more
+  const by = 448 + breathe, r = 11 + S.love / 25;
+  const gl = g.createRadialGradient(200, by, 1, 200, by, r * 2.8);
+  gl.addColorStop(0, 'rgba(255,214,102,.6)'); gl.addColorStop(1, 'rgba(255,214,102,0)');
+  g.fillStyle = gl; g.beginPath(); g.arc(200, by, r * 2.8, 0, 7); g.fill();
+  g.fillStyle = '#ffd166'; g.beginPath(); g.arc(200, by, r, 0, 7); g.fill();
+  g.fillStyle = shade(R, 0.05); g.beginPath(); g.arc(200 + r * 0.45, by - r * 0.3, r * 0.85, 0, 7); g.fill();
+  g.restore();
+}
+
+function wizHair(t) {
+  const H = S.hair;
+  const grd = g.createLinearGradient(0, 110, 0, 260);
+  grd.addColorStop(0, shade(H, 0.15)); grd.addColorStop(1, shade(H, -0.05));
+  g.fillStyle = grd; g.strokeStyle = shade(H, -0.35); g.lineWidth = 2;
+  // side tufts over the ears
+  for (let side = -1; side <= 1; side += 2) {
+    g.beginPath();
+    g.moveTo(200 + side * 92, 132);
+    g.quadraticCurveTo(200 + side * 120, 196, 200 + side * 108, 266);
+    g.quadraticCurveTo(200 + side * 98, 236, 200 + side * 90, 252);
+    g.quadraticCurveTo(200 + side * 86, 206, 200 + side * 76, 196);
+    g.closePath(); g.fill(); g.stroke();
+  }
+  // messy bangs under the hat brim
+  const tips = [[106, 196], [130, 178], [154, 202], [178, 182], [204, 204], [228, 184], [252, 200], [276, 180], [298, 196]];
+  g.beginPath();
+  g.moveTo(88, 128);
+  let px = 88;
+  for (let i = 0; i < tips.length; i++) {
+    const tx = tips[i][0], ty = tips[i][1];
+    g.quadraticCurveTo((px + tx) / 2 - 2, 150, tx, ty);
+    g.quadraticCurveTo(tx + 5, 162, tx + 12, 148);
+    px = tx + 12;
+  }
+  g.lineTo(312, 128);
+  g.closePath(); g.fill(); g.stroke();
+}
+
+function wizHat(t, squish) {
+  const C = S.hat;
+  const sway = Math.sin(t * 1.6) * 4;
+  g.save();
+  g.translate(200, 128); g.scale(1 + squish * 0.06, 1 - squish * 0.14); g.rotate(-0.04 + Math.sin(t * 1.1) * 0.015); g.translate(-200, -128);
+  // cone with a floppy tip
+  const grd = g.createLinearGradient(100, 0, 300, 0);
+  grd.addColorStop(0, shade(C, 0.25)); grd.addColorStop(1, shade(C, -0.25));
+  g.fillStyle = grd;
+  g.beginPath();
+  g.moveTo(104, 124);
+  g.bezierCurveTo(134, 76, 170, 26, 214, 14);
+  g.quadraticCurveTo(262 + sway, 6, 296 + sway, 42);
+  g.lineTo(284 + sway, 52);
+  g.quadraticCurveTo(262, 36, 244, 46);
+  g.bezierCurveTo(262, 82, 288, 108, 296, 124);
+  g.closePath(); g.fill();
+  g.strokeStyle = shade(C, -0.45); g.lineWidth = 2.5; g.stroke();
+  // golden band
+  g.fillStyle = '#e7b84a';
+  g.beginPath(); g.moveTo(110, 112); g.quadraticCurveTo(200, 94, 290, 112); g.lineTo(294, 126); g.quadraticCurveTo(200, 108, 106, 126); g.closePath(); g.fill();
+  // crescent moon + stars
+  g.fillStyle = '#ffd166'; g.beginPath(); g.arc(188, 66, 14, 0, 7); g.fill();
+  g.fillStyle = shade(C, 0.08); g.beginPath(); g.arc(195, 61, 12, 0, 7); g.fill();
+  const st = [[150, 92, 6], [232, 58, 7], [252, 96, 5], [172, 40, 4], [214, 86, 4]];
+  for (let i = 0; i < st.length; i++) {
+    const tw = 0.8 + 0.2 * Math.sin(t * 3 + i * 1.7);
+    star(st[i][0], st[i][1], st[i][2] * tw, 5, 0.45); g.fillStyle = '#ffe28a'; g.fill();
+  }
+  // little star hanging from the tip
+  const tx = 290 + sway, ty = 56;
+  const gl = g.createRadialGradient(tx, ty, 1, tx, ty, 18);
+  gl.addColorStop(0, 'rgba(255,230,140,.8)'); gl.addColorStop(1, 'rgba(255,230,140,0)');
+  g.fillStyle = gl; g.beginPath(); g.arc(tx, ty, 18, 0, 7); g.fill();
+  star(tx, ty, 8, 5, 0.45); g.fillStyle = '#fff1b0'; g.fill();
+  // brim
+  g.fillStyle = shade(C, -0.12); g.strokeStyle = shade(C, -0.45); g.lineWidth = 2.5;
+  g.beginPath(); g.ellipse(200, 126, 150, 24, -0.03, 0, 7); g.fill(); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,.18)'; g.lineWidth = 4;
+  g.beginPath(); g.ellipse(200, 122, 140, 18, -0.03, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
+  g.restore();
+}
+
+/** Hand + wand. Returns where the tip is (for sparkles). */
+function wizWand(t, cast) {
+  const px = 322, py = 474;
+  const ang = 0.3 + (cast > 0 ? Math.sin(t * 15) * 0.4 * cast : Math.sin(t * 1.2) * 0.05);
+  g.save(); g.translate(px, py); g.rotate(ang);
+  g.lineCap = 'round';
+  g.strokeStyle = '#5c3a1e'; g.lineWidth = 10; g.beginPath(); g.moveTo(0, 14); g.lineTo(0, -150); g.stroke();
+  g.strokeStyle = '#8a5a2e'; g.lineWidth = 3.5; g.beginPath(); g.moveTo(-2, 4); g.lineTo(-2, -142); g.stroke();
+  g.strokeStyle = '#e7b84a'; g.lineWidth = 3; g.beginPath(); g.moveTo(-5, -20); g.lineTo(5, -20); g.moveTo(-5, -28); g.lineTo(5, -28); g.stroke();
+  const pulse = 1 + 0.25 * Math.sin(t * 4) + cast * 0.8;
+  const gl = g.createRadialGradient(0, -158, 1, 0, -158, 24 * pulse);
+  gl.addColorStop(0, 'rgba(255,240,160,.95)'); gl.addColorStop(1, 'rgba(255,240,160,0)');
+  g.fillStyle = gl; g.beginPath(); g.arc(0, -158, 24 * pulse, 0, 7); g.fill();
+  star(0, -158, 9 * (0.9 + 0.2 * pulse), 5, 0.45); g.fillStyle = '#fffbe0'; g.fill();
+  g.restore();
+  // sleeve + hand
+  g.fillStyle = shade(S.robe, -0.1); g.beginPath(); g.ellipse(px + 6, py + 22, 30, 18, 0.2, 0, 7); g.fill();
+  g.fillStyle = SKIN; g.strokeStyle = '#e0a593'; g.lineWidth = 2;
+  g.beginPath(); g.ellipse(px, py - 4, 17, 15, 0, 0, 7); g.fill(); g.stroke();
+  return [px + Math.sin(ang) * 158, py - Math.cos(ang) * 158];
+}
+
+/** Pip: a little floating light that keeps him company. */
+function wisp(t, dt) {
+  const fast = A.petHand > 0.3 || SP.name !== '' ? 2.2 : 1;
+  A.wispT += dt * fast;
+  const x = 70 + Math.sin(A.wispT * 0.6) * 26, y = 270 + Math.sin(A.wispT * 1.1) * 32;
+  const gl = g.createRadialGradient(x, y, 1, x, y, 30);
+  gl.addColorStop(0, 'rgba(255,244,190,.75)'); gl.addColorStop(1, 'rgba(255,244,190,0)');
+  g.fillStyle = gl; g.beginPath(); g.arc(x, y, 30, 0, 7); g.fill();
+  g.fillStyle = '#fff8d6'; g.beginPath(); g.arc(x, y, 10, 0, 7); g.fill();
+  const blinkOff = (t % 4) < 0.12;
+  g.fillStyle = '#5a4a2a';
+  if (!blinkOff) { g.beginPath(); g.arc(x - 3.5, y - 1, 1.8, 0, 7); g.arc(x + 3.5, y - 1, 1.8, 0, 7); g.fill(); }
+  if (Math.random() < dt * 2) spawn('spark', x, y, (Math.random() - 0.5) * 20, 20, 0.7, 4);
+}
+
+// ---------------------------------------------------------- background ----
+function sky(t, w, h) {
+  const gr = g.createLinearGradient(0, 0, 0, h);
+  gr.addColorStop(0, S.sky[0]); gr.addColorStop(0.55, S.sky[1]); gr.addColorStop(1, S.sky[2]);
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < STARS.length; i++) {
+    const s = STARS[i];
+    g.globalAlpha = 0.25 + 0.75 * Math.abs(Math.sin(t * s[3] + i));
+    g.fillStyle = '#ffffff';
+    g.beginPath(); g.arc(s[0] * w, s[1] * h * 0.75, s[2] * 0.8, 0, 7); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+// --------------------------------------------------------------- spells ----
+// Original spells (the app or the AI casts them, also shown on the OLED).
+const SPELLS = { starburst: 2.4, float: 3.6, rainbow: 4.5, snow: 6, fireworks: 4.5, bubbles: 5, fade: 3.2, dream: 4.5 };
+const SP = { name: '', t0: -99, dur: 0, last: 0 };
+const FIRE = ['#ff6b6b', '#ffd166', '#06d6a0', '#4cc9f0', '#c77dff', '#ff9ff3'];
+
+function spellProgress() {
+  if (!SP.name) return -1;
+  const p = (A.t - SP.t0) / SP.dur;
+  if (p >= 1) { SP.name = ''; return -1; }
+  return p;
+}
+
+function spellBackground(p, w, h) {
+  if (SP.name === 'rainbow') {
+    const a = Math.sin(Math.PI * p);
+    const cols = ['#ff595e', '#ff924c', '#ffca3a', '#8ac926', '#1982c4', '#4267ac', '#6a4c93'];
+    g.save(); g.globalAlpha = a * 0.75; g.lineWidth = 14;
+    for (let i = 0; i < cols.length; i++) {
+      g.strokeStyle = cols[i]; g.beginPath(); g.arc(200, 470, 330 - i * 14, Math.PI, 0); g.stroke();
+    }
+    g.restore();
+  }
+}
+
+function spellEffects(p, dt, tip) {
+  const n = SP.name, el = A.t - SP.t0;
+  if (n === 'starburst' && SP.last === 0) {
+    for (let i = 0; i < 60; i++) {
+      const a = Math.random() * Math.PI * 2, v = 80 + Math.random() * 220;
+      spawn(i % 3 ? 'spark' : 'gstar', tip[0], tip[1], Math.cos(a) * v, Math.sin(a) * v, 1.6 + Math.random(), 7 + Math.random() * 8, '', 140);
+    }
+  }
+  if (n === 'snow' && p < 0.8) for (let i = 0; i < 2; i++) if (Math.random() < dt * 20) spawn('snow', Math.random() * 420 - 10, -10, (Math.random() - 0.5) * 30, 50 + Math.random() * 50, 9, 2 + Math.random() * 3.5);
+  if (n === 'bubbles' && p < 0.85 && Math.random() < dt * 9) spawn('bubble', 40 + Math.random() * 320, 560, (Math.random() - 0.5) * 20, -60 - Math.random() * 50, 6, 8 + Math.random() * 12);
+  if (n === 'fireworks' && el - SP.last > 0.55 && p < 0.85) {
+    SP.last = el;
+    const x = 60 + Math.random() * 280, y = 40 + Math.random() * 160, c = FIRE[Math.floor(Math.random() * FIRE.length)];
+    for (let i = 0; i < 34; i++) { const a = i / 34 * Math.PI * 2, v = 90 + Math.random() * 60; spawn('dot', x, y, Math.cos(a) * v, Math.sin(a) * v, 1.5, 4, c, 90); }
+  }
+  if ((n === 'float' || n === 'rainbow' || n === 'dream') && Math.random() < dt * 8) spawn('spark', 120 + Math.random() * 160, 500, 0, -40, 1, 6);
+  if (n !== 'fireworks') SP.last = el;
+}
+
 // ------------------------------------------------------------ main loop -----
 let last = performance.now();
 function current() {
   if (A.touchPet || S.petting) return 'pet';
+  if (SP.name) return SP.name === 'dream' ? 'sleepy' : SP.name === 'fade' ? 'wink' : 'excited';
   if (A.t - A.pokeT < 1.3) return 'pout';
   if (S.listening) return 'listening';
   if (S.thinking) return 'thinking';
@@ -486,8 +742,13 @@ function current() {
 }
 
 function frame(now) {
+  requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  // the view can get its real size after the page loaded
+  if (Math.round(innerWidth * (window.devicePixelRatio || 1)) !== cv.width || Math.round(innerHeight * (window.devicePixelRatio || 1)) !== cv.height) resize();
+  if (cv.width < 2 || cv.height < 2) return;
   const t = (A.t += dt);
+  const wiz = S.character === 'wizard';
   const name = current(), e = EX[name];
 
   // --- animation targets
@@ -536,22 +797,28 @@ function frame(now) {
 
   // --- draw
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
-  g.clearRect(0, 0, cv.width, cv.height);
+  sky(t, cv.width / DPR, cv.height / DPR);
   g.translate(OX, OY); g.scale(SC, SC);
-  // soft glow behind her
+  const sp = spellProgress();
+  if (sp >= 0) spellBackground(sp, cv.width / DPR, cv.height / DPR);
+  // soft glow behind the character
+  const gc = wiz ? S.hat : S.hair;
   const glow = g.createRadialGradient(200, 230, 20, 200, 250, 260);
-  glow.addColorStop(0, rgba(S.hair, 0.28)); glow.addColorStop(1, rgba(S.hair, 0));
+  glow.addColorStop(0, rgba(gc, 0.35)); glow.addColorStop(1, rgba(gc, 0));
   g.fillStyle = glow; g.fillRect(-200, -100, 800, 800);
 
   const breathe = Math.sin(t * 1.6) * 2;
+  const lift = sp >= 0 && SP.name === 'float' ? Math.sin(Math.PI * sp) * 48 : 0;
+  const cast = sp >= 0 ? Math.max(0, 1 - (t - SP.t0) / 1.0) : 0;
   g.save();
-  g.translate(tap, -bounce);
+  if (sp >= 0 && SP.name === 'fade') g.globalAlpha = 1 - 0.85 * Math.sin(Math.PI * sp);
+  g.translate(tap, -bounce - lift + charOffset());
   // head group rotates around the neck
   const headY = breathe * 0.6;
   g.save(); g.translate(200, 360 + headY); g.rotate(A.tilt * Math.PI / 180); g.translate(-200, -360);
-  backHair(t);
+  if (wiz) wizBackHair(); else backHair(t);
   g.restore();
-  body(t);
+  if (wiz) wizBody(t); else body(t);
   g.save(); g.translate(200, 360 + headY); g.rotate(A.tilt * Math.PI / 180); g.translate(-200, -360);
   // face
   const puff = name === 'pout' ? Math.min(1, (t - A.pokeT) * 6) : 0;
@@ -574,32 +841,46 @@ function frame(now) {
   g.strokeStyle = '#e0a593'; g.lineWidth = 2.5; g.lineCap = 'round';
   g.beginPath(); g.moveTo(203, 287); g.lineTo(200, 293); g.stroke();
   mouth(e.mouth, A.mouth);
-  // soft shadow of the bangs on her forehead
-  g.save(); facePath(puff); g.clip(); g.translate(0, 9); g.globalAlpha = 0.16;
-  const keepHair = S.hair; S.hair = '#5a3b6e'; frontHair(t); S.hair = keepHair;
-  g.restore();
-  frontHair(t);
-  brows(e.lift, e.ang);
+  if (wiz) {
+    wizHair(t);
+    brows(e.lift, e.ang);
+    wizHat(t, A.petHand * (0.5 + 0.5 * Math.sin(t * 9)));
+  } else {
+    // soft shadow of the bangs on her forehead
+    g.save(); facePath(puff); g.clip(); g.translate(0, 9); g.globalAlpha = 0.16;
+    const keepHair = S.hair; S.hair = '#5a3b6e'; frontHair(t); S.hair = keepHair;
+    g.restore();
+    frontHair(t);
+    brows(e.lift, e.ang);
+  }
   if (e.fx && ['anger', 'tear', 'bang', 'dots'].includes(e.fx)) headFx(e.fx, t);
   if (name === 'listening') headFx('listen', t);
   if (A.idle === 'yawn' && t - A.idleStart < 2.2) { /* sleepy face shown */ }
   g.restore();
-  if (A.petHand > 0.02) petHand(A.handX, A.petHand);
+  let tip = [200, 60];
+  if (wiz) { tip = wizWand(t, cast); wisp(t, dt); }
+  if (A.petHand > 0.02) petHand(A.handX, A.petHand, wiz ? 34 : 62);
   g.restore();
+  tip = [tip[0] + tap, tip[1] - bounce - lift + charOffset()];
+  if (sp >= 0) spellEffects(sp, dt, tip);
+  if (sp >= 0 && SP.name === 'starburst' && t - SP.t0 < 0.35) {            // flash
+    g.fillStyle = 'rgba(255,250,220,' + (0.6 * (1 - (t - SP.t0) / 0.35)) + ')'; g.fillRect(-200, -200, 800, 1000);
+  }
+  if (wiz && name === 'pet' && Math.random() < dt * 5) spawn('gstar', 120 + Math.random() * 160, 120, (Math.random() - 0.5) * 40, -60, 1.6, 7 + Math.random() * 5);
 
   if (e.fx) fx(e.fx, t, dt);
   if (A.idle === 'hum' && t - A.idleStart < 3) fx('notes', t, dt);
   drawParticles(dt);
-  requestAnimationFrame(frame);
+  if (!A.ready) { A.ready = true; try { if (window.AndroidBridge) AndroidBridge.ready(); } catch (er) {} }
 }
 requestAnimationFrame(frame);
 
 // -------------------------------------------------------------- touches ----
-function toLocal(ev) { return { x: (ev.clientX - OX) / SC, y: (ev.clientY - OY) / SC }; }
+function toLocal(ev) { return { x: (ev.clientX - OX) / SC, y: (ev.clientY - OY) / SC - charOffset() }; }
 function tell(kind) { try { window.AndroidBridge && AndroidBridge.touch(kind); } catch (e) {} }
 let downAt = null, rubbed = 0;
 cv.addEventListener('pointerdown', ev => {
-  const p = toLocal(ev); A.pointer = p; downAt = { ...p, t: A.t }; rubbed = 0;
+  const p = toLocal(ev); A.pointer = p; downAt = { x: p.x, y: p.y, t: A.t }; rubbed = 0;
   if (p.y < 175 && p.x > 60 && p.x < 340) { A.touchPet = true; A.handX = p.x; tell('pat_start'); }
 });
 cv.addEventListener('pointermove', ev => {
@@ -638,6 +919,11 @@ window.Avatar = {
     if (name === 'love' || name === 'excited') for (let i = 0; i < 5; i++) fx(name === 'love' ? 'hearts' : 'sparkles', A.t, 1);
   },
   word() { A.wordT = A.t; },
+  /** starburst, float, rainbow, snow, fireworks, bubbles, fade, dream */
+  spell(name) {
+    if (!SPELLS[name]) name = 'starburst';
+    SP.name = name; SP.t0 = A.t; SP.dur = SPELLS[name]; SP.last = 0;
+  },
   hearts(n) { for (let i = 0; i < (n || 6); i++) spawn('heart', 110 + Math.random() * 180, 220 + Math.random() * 60, (Math.random() - 0.5) * 40, -80, 1.8, 10 + Math.random() * 10); },
 };
 </script>
