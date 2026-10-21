@@ -152,7 +152,8 @@ object Magic {
         // clock
         val now = LocalDateTime.now()
         if (Regex("what('s| is) the time|what time is it|tell me the time|current time").containsMatchIn(t)) {
-            val h = now.hour % 12, hh = if (h == 0) 12 else h
+            val h = now.hour % 12
+            val hh = if (h == 0) 12 else h
             return Reply("It's %d:%02d %s.".format(hh, now.minute, if (now.hour < 12) "in the morning" else if (now.hour < 17) "in the afternoon" else if (now.hour < 21) "in the evening" else "at night"), "neutral")
         }
         if (Regex("what('s| is) (the )?(date|day)|what day is (it|today)|today's date").containsMatchIn(t))
