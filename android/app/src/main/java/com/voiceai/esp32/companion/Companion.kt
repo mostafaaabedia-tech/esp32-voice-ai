@@ -137,7 +137,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         }
     }
 
-    fun setListening(on: Boolean) {
+    fun micChanged(on: Boolean) {
         if (listening == on) return
         listening = on
         if (on) {

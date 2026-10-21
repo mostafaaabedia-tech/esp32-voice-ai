@@ -185,7 +185,7 @@ private fun App(vm: MainViewModel) {
     }
 
     // the companion's face shows when you are talking
-    LaunchedEffect(listening) { vm.companion.setListening(listening) }
+    LaunchedEffect(listening) { vm.companion.micChanged(listening) }
     // remember which main screen to go back to
     LaunchedEffect(vm.screen) { if (vm.screen == Screen.CHAT || vm.screen == Screen.COMPANION) vm.home = vm.screen }
 
