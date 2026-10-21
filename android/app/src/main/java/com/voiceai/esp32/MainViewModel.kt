@@ -73,12 +73,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val modelChoices: List<String>
         get() = (pcModels + device?.models.orEmpty() + settings.model).distinct().filter { it.isNotBlank() }
 
+    /** The phone voice moves the OLED subtitles along (only for the answer we just showed there). */
+    @Volatile private var syncSubs = false
+    @Volatile private var lastSubSent = 0L
+
     init {
         if (current == null) currentId = null
+        phoneVoice.onProgress = { pos, len ->
+            val host = settings.espHost
+            val now = System.currentTimeMillis()
+            if (syncSubs && host.isNotBlank() && now - lastSubSent > 250) {
+                lastSubSent = now
+                viewModelScope.launch(Dispatchers.IO) { Api.espSubPos(host, pos, len) }
+            }
+        }
+        phoneVoice.onDone = {
+            val host = settings.espHost
+            if (syncSubs && host.isNotBlank()) viewModelScope.launch(Dispatchers.IO) { Api.espSubPos(host, 0, 0, done = true) }
+            syncSubs = false
+        }
         viewModelScope.launch {
             while (isActive) {
                 if (!busy) refreshStatus()
-                delay(if (device?.state == "speaking") 1500 else 6000)
+                // faster on the settings page so you can watch the sensors live
+                delay(if (screen == Screen.SETTINGS || device?.state == "showing") 1500 else 6000)
             }
         }
     }
@@ -278,7 +296,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val msgs = JSONArray()
                         if (s.persona != Persona.ASSISTANT) msgs.put(JSONObject().put("role", "system").put("content", s.persona.prompt))
                         history.forEach { msgs.put(JSONObject().put("role", it.role).put("content", it.content.take(1500))) }
-                        result = Api.espAsk(s.espHost, msgs, speak = s.route.onSpeaker, temperature = s.temperature)
+                        result = Api.espAsk(s.espHost, msgs, show = true, temperature = s.temperature)
                     }
                 }
                 val (reply, u) = result
@@ -288,13 +306,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val usageCopy = usage.toList()
                 launch(Dispatchers.IO) { store.saveUsage(usageCopy) }
 
-                // Play the answer
-                if (s.route.onPhone) phoneVoice.speak(plain(reply), s.lang)
-                if (s.mode == Mode.DIRECT && !s.route.onSpeaker) face("idle")
-                if (s.mode == Mode.DIRECT && s.route.onSpeaker && s.espHost.isNotBlank()) {
-                    try { Api.espSpeak(s.espHost, plain(reply)) } catch (e: Exception) { toast = e.message }
+                // Show the answer on the OLED (ESP32 mode does that by itself) and read it out loud
+                val spoken = plain(reply)
+                if (s.mode == Mode.DIRECT && s.espHost.isNotBlank()) {
+                    runCatching { Api.espShow(s.espHost, spoken) }   // screen is optional: no error if it's off
                 }
-                if (s.route.onSpeaker) refreshStatus()
+                syncSubs = s.route.onPhone && s.espHost.isNotBlank()
+                if (s.route.onPhone) phoneVoice.speak(spoken, s.lang)
                 if (s.handsFree) launch { waitUntilQuiet(s); listenRequest++ }
             } catch (e: CancellationException) {
                 if (s.mode == Mode.DIRECT) face("idle")
@@ -312,16 +330,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Hands-free: wait until the phone and the speaker stop talking. */
+    /** Hands-free: wait until the phone stops talking. */
     private suspend fun waitUntilQuiet(s: AppSettings) {
         delay(600)
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < 90_000) {
-            val phoneBusy = s.route.onPhone && phoneVoice.speaking
-            val espBusy = s.route.onSpeaker && s.espHost.isNotBlank() &&
-                runCatching { Api.espInfo(s.espHost).state == "speaking" }.getOrDefault(false)
-            if (!phoneBusy && !espBusy) break
-            delay(700)
+            if (!(s.route.onPhone && phoneVoice.speaking)) break
+            delay(500)
         }
         delay(300)
     }
@@ -354,14 +369,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { Api.espFace(host, state, text) }
     }
 
-    // ------------------------------------------------------------------ audio
-    fun speakOnEsp(text: String) {
+    // ------------------------------------------------------------ screen / voice
+    /** Show a message on the ESP32 OLED again. */
+    fun showOnScreen(text: String) {
         val host = settings.espHost
         if (host.isBlank()) { toast = "Add the ESP32 address in Settings"; return }
         viewModelScope.launch {
             try {
-                Api.espSpeak(host, plain(text))
-                toast = "Playing on speaker"
+                Api.espShow(host, plain(text))
+                syncSubs = false
+                toast = "Showing on the ESP32 screen"
                 delay(300)
                 refreshStatus()
             } catch (e: Exception) {
@@ -371,10 +388,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun speakOnPhone(text: String) {
+        syncSubs = false
         if (!phoneVoice.speak(plain(text), settings.lang)) toast = "Phone voice is still starting, try again"
     }
 
     fun stopAudio() {
+        syncSubs = false
         phoneVoice.stop()
         val host = settings.espHost
         if (host.isNotBlank()) viewModelScope.launch {
@@ -384,8 +403,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun setVolume(v: Float) = pushToDevice(JSONObject().put("volume", v.toDouble()), quiet = true)
-    fun setEspVoice(mode: Int) = pushToDevice(JSONObject().put("voice_mode", mode), quiet = true)
+    /** OLED subtitle speed when the phone is silent (ms per letter). */
+    fun setReadSpeed(msPerChar: Int) = pushToDevice(JSONObject().put("read_ms_per_char", msPerChar), quiet = true)
 
     fun resetUsage() {
         usage.clear()

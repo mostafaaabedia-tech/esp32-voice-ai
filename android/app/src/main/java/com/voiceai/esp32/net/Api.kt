@@ -1,6 +1,7 @@
 package com.voiceai.esp32.net
 
 import com.voiceai.esp32.data.DeviceInfo
+import com.voiceai.esp32.data.Sensors
 import com.voiceai.esp32.data.Usage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -67,18 +68,24 @@ object Api {
         val c = j.optJSONObject("config") ?: JSONObject()
         val s = j.optJSONObject("session") ?: JSONObject()
         val m = j.optJSONArray("models") ?: JSONArray()
+        val se = j.optJSONObject("sensors") ?: JSONObject()
         return DeviceInfo(
             ip = j.optString("ip"), fw = j.optString("fw"), rssi = j.optInt("rssi"),
             heap = j.optLong("heap"), uptimeSec = j.optLong("uptime_s"), state = j.optString("state"),
             ollamaOnline = j.optBoolean("ollama_online"),
             models = (0 until m.length()).map { m.getString(it) },
             ollamaHost = c.optString("ollama_host"), model = c.optString("model"),
-            voiceMode = c.optInt("voice_mode"), volume = c.optDouble("volume", 2.0).toFloat(),
             numCtx = c.optInt("num_ctx"),
             sessionRequests = s.optInt("requests"), sessionPrompt = s.optLong("prompt_tokens"),
             sessionCompletion = s.optLong("completion_tokens"),
             minHeap = j.optLong("min_heap"),
             lastReset = j.optString("reset"),
+            sensors = Sensors(
+                ultrasonic = se.optBoolean("ultrasonic"), twoSensors = se.optBoolean("two_sensors"),
+                distanceCm = se.optInt("distance_cm", -1), person = se.optBoolean("person"),
+                ir = se.optBoolean("ir"), petting = se.optBoolean("petting"),
+                pets = se.optInt("pets"), love = se.optInt("love"),
+            ),
         )
     }
 
@@ -91,13 +98,20 @@ object Api {
         if (code != 200) throw ApiException(errorOf(text, code))
     }
 
-    suspend fun espSpeak(host: String, text: String) {
+    /** Show text on the OLED, word by word like subtitles. */
+    suspend fun espShow(host: String, text: String) {
         val (code, body) = try {
             request("POST", base(host) + "/api/speak", JSONObject().put("text", text))
         } catch (e: IOException) {
-            throw ApiException("Speaker not reachable at $host")
+            throw ApiException("ESP32 not reachable at $host")
         }
         if (code != 200) throw ApiException(errorOf(body, code))
+    }
+
+    /** Keep the OLED subtitles in sync with the phone voice. */
+    suspend fun espSubPos(host: String, pos: Int, len: Int, done: Boolean = false) {
+        val body = if (done) JSONObject().put("done", true) else JSONObject().put("pos", pos).put("len", len)
+        runCatching { request("POST", base(host) + "/api/subpos", body, 1500) }
     }
 
     /** Tell the OLED face what the phone is doing: listening, thinking, error, idle. */
@@ -112,8 +126,8 @@ object Api {
     }
 
     /** Ask through the ESP32 (the original way). Polls until the answer is ready. */
-    suspend fun espAsk(host: String, messages: JSONArray, speak: Boolean, temperature: Float = 0.7f): Pair<String, Usage> {
-        val body = JSONObject().put("messages", messages).put("speak", speak).put("temperature", temperature.toDouble())
+    suspend fun espAsk(host: String, messages: JSONArray, show: Boolean, temperature: Float = 0.7f): Pair<String, Usage> {
+        val body = JSONObject().put("messages", messages).put("speak", show).put("temperature", temperature.toDouble())
         val (code, text) = try {
             request("POST", base(host) + "/api/ask", body)
         } catch (e: IOException) {

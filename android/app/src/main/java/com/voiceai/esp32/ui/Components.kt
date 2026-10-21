@@ -309,21 +309,10 @@ fun fmtSec(ms: Long): String = if (ms < 10_000) "%.1fs".format(ms / 1000.0) else
 
 // ------------------------------------------------------------------ brand --
 const val CREDITS = "Made by Mostafa Mesbah Aabedi & Sebghatullah Haidari"
-const val SCHOOL = "Afghan-Turk Maarif Schools · Herat Boys HS"
-
-@Composable
-fun SchoolLogo(size: Dp) {
-    Image(
-        painter = painterResource(R.drawable.school_logo),
-        contentDescription = "Afghan-Turk Maarif Schools Herat Boys HS",
-        modifier = Modifier.size(size),
-    )
-}
-
-/** Logo + app name + credits, shown at the top of the app. */
+/** App name + credits, shown at the top of the app. */
 @Composable
 fun BrandHeader(modifier: Modifier = Modifier, compact: Boolean = false) {
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
@@ -332,17 +321,10 @@ fun BrandHeader(modifier: Modifier = Modifier, compact: Boolean = false) {
                     listOf(Navy, Color(0xFF1C5C86), Color(0xFF1D8C9A)),
                 )
             )
-            .padding(horizontal = 14.dp, vertical = if (compact) 10.dp else 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 16.dp, vertical = if (compact) 10.dp else 16.dp),
     ) {
-        Box(Modifier.clip(CircleShape).background(Color.White).padding(2.dp)) {
-            SchoolLogo(if (compact) 40.dp else 54.dp)
-        }
-        Column(Modifier.padding(start = 12.dp)) {
-            Text("VoiceAI", color = Color.White, fontWeight = FontWeight.Bold, fontSize = if (compact) 17.sp else 20.sp)
-            Text(CREDITS, color = Color.White.copy(alpha = 0.92f), fontSize = 12.sp, lineHeight = 16.sp)
-            if (!compact) Text(SCHOOL, color = Color.White.copy(alpha = 0.65f), fontSize = 11.sp)
-        }
+        Text("VoiceAI", color = Color.White, fontWeight = FontWeight.Bold, fontSize = if (compact) 17.sp else 22.sp)
+        Text(CREDITS, color = Color.White.copy(alpha = 0.92f), fontSize = if (compact) 12.sp else 13.sp, lineHeight = 17.sp)
     }
 }
 

@@ -26,6 +26,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -82,9 +84,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
     var words by remember { mutableStateOf(s.maxWords.toString()) }
     var tokens by remember { mutableStateOf(s.maxTokens.toString()) }
     var memory by remember { mutableStateOf(s.history.toString()) }
-    var volume by remember { mutableFloatStateOf(vm.device?.volume ?: 2f) }
     var checking by remember { mutableStateOf(false) }
-    LaunchedEffect(vm.device?.volume) { vm.device?.volume?.let { volume = it } }
 
     fun saveLocal() = vm.updateSettings(
         vm.settings.copy(
@@ -107,7 +107,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Text(s.mode.hint, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 17.sp)
                 Spacer(Modifier.height(12.dp))
                 Field("PC address (Ollama)", pcHost, "192.168.80.189", KeyboardType.Uri) { pcHost = it }
-                Field("ESP32 address (speaker)", espHost, "192.168.80.45", KeyboardType.Uri) { espHost = it }
+                Field("ESP32 address (face)", espHost, "192.168.80.45", KeyboardType.Uri) { espHost = it }
                 Button(
                     onClick = {
                         saveLocal(); checking = true
@@ -125,6 +125,10 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(10.dp))
                 StatusRows(vm)
             }
+
+            // -------------------------------------------------- face + sensors
+            SectionTitle("ESP32 face", "ultrasonic + IR sensors, live")
+            AppCard { SensorPanel(vm) }
 
             // -------------------------------------------------- model
             SectionTitle("AI model", "also saved on the ESP32")
@@ -160,19 +164,16 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             // -------------------------------------------------- voice
             SectionTitle("Voice")
             AppCard {
-                Label("Play answers on")
-                Segmented(Route.entries, s.route, { if (it == Route.BOTH) "Both" else it.label }) {
+                Label("Answers")
+                Segmented(Route.entries, s.route, { it.label }) {
                     vm.updateSettings(vm.settings.copy(route = it))
                 }
-                Spacer(Modifier.height(14.dp))
-                Label("ESP32 voice")
-                Segmented(listOf(0, 1), vm.device?.voiceMode ?: 0, { if (it == 0) "Robot (offline)" else "PC voice" }) {
-                    vm.setEspVoice(it)
-                }
-                Spacer(Modifier.height(14.dp))
-                Label("Speaker volume  ${(volume / 4f * 100).toInt()}%")
-                Slider(value = volume, onValueChange = { volume = it }, valueRange = 0f..4f, onValueChangeFinished = { vm.setVolume(volume) })
-                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Read aloud: the phone speaks and the subtitles on the ESP32 screen follow the voice.",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                Spacer(Modifier.height(10.dp))
                 LangPicker(s.lang) { vm.updateSettings(vm.settings.copy(lang = it)) }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -190,14 +191,6 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                     }
                     Switch(checked = s.autoSend, onCheckedChange = { vm.updateSettings(vm.settings.copy(autoSend = it)) })
                 }
-                Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = { saveLocal(); vm.speakOnEsp("Hello! This is your voice assistant speaker test.") },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = MaterialTheme.colorScheme.onSurface,
-                    ),
-                ) { Text("Test speaker") }
             }
 
             SectionTitle("Display")
@@ -212,7 +205,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 4.3 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 5.0 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -255,6 +248,66 @@ private fun StatusRows(vm: MainViewModel) {
             }
         }
     }
+}
+
+/** Live view of what the ESP32 sensors see + OLED settings. */
+@Composable
+private fun SensorPanel(vm: MainViewModel) {
+    val d = vm.device
+    val se = d?.sensors
+    if (!vm.deviceOnline || d == null || se == null) {
+        Text(
+            "Connect the ESP32 to see its sensors here.\nUltrasonic HC-SR04: TRIG → GPIO26, ECHO → GPIO27 (through a 1k/2k divider).\nIR sensor OUT → GPIO34.",
+            fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 19.sp,
+        )
+        return
+    }
+    val rows = buildList {
+        add(
+            "Ultrasonic" to when {
+                !se.ultrasonic -> "Not found · check TRIG/ECHO wiring"
+                se.person && se.distanceCm > 0 -> "Someone at ${se.distanceCm} cm" + if (se.twoSensors) " (2 sensors)" else ""
+                else -> "Nobody in front" + if (se.twoSensors) " (2 sensors)" else ""
+            }
+        )
+        add("IR sensor" to if (!se.ir) "Not set up" else if (se.petting) "Being petted ♥" else "Waiting for pets")
+        add("Pets today" to "${se.pets}")
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        rows.forEach { (k, v) ->
+            Row {
+                Text(k, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text(
+                    v, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = if (v.startsWith("Not")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("♥", color = Color(0xFFFF78AA), fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
+            LinearProgressIndicator(
+                progress = { se.love / 100f },
+                modifier = Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(50)),
+                color = Color(0xFFFF78AA),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("${se.love}%", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(
+            "Love goes up when you pet it and slowly goes down when you don't.",
+            fontSize = 12.sp, color = MaterialTheme.colorScheme.outline,
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    var speed by remember { mutableFloatStateOf(60f) }
+    Label("Subtitle speed when the phone is silent  · ${if (speed < 45) "fast" else if (speed < 80) "normal" else "slow"}")
+    Slider(
+        value = 140f - speed, onValueChange = { speed = 140f - it }, valueRange = 0f..110f,
+        onValueChangeFinished = { vm.setReadSpeed(speed.toInt()) },
+    )
 }
 
 @Composable

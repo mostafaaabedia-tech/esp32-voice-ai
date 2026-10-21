@@ -9,7 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 
-// Colours taken from the school logo: deep navy + teal
+// Deep navy + teal, the same colours as the OLED face
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF2EC4C9),
     onPrimary = Color(0xFF00262B),

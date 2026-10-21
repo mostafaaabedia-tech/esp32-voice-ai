@@ -69,7 +69,7 @@ import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material.icons.outlined.Speaker
+import androidx.compose.material.icons.outlined.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -235,7 +235,7 @@ private fun EmptyState(vm: MainViewModel, onPick: (String) -> Unit, onMic: () ->
         while (true) { delay(3500); idx = (idx + 1) % lines.size }
     }
     val s = vm.settings
-    val needsSetup = s.pcHost.isBlank() || (s.route.onSpeaker && s.espHost.isBlank())
+    val needsSetup = s.pcHost.isBlank()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
@@ -247,7 +247,7 @@ private fun EmptyState(vm: MainViewModel, onPick: (String) -> Unit, onMic: () ->
             GradientText(lines[i], 26.sp, Modifier.fillMaxWidth().heightIn(min = 70.dp))
         }
         Text(
-            "Type a question or tap the mic. The answer shows here and plays on your ESP32 speaker.",
+            "Type a question or tap the mic. The answer shows here and on your ESP32's face. Pet it with the IR sensor!",
             color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, fontSize = 14.sp, lineHeight = 20.sp,
             modifier = Modifier.padding(horizontal = 12.dp),
         )
@@ -379,7 +379,7 @@ private fun AiMessage(vm: MainViewModel, m: Message, isLast: Boolean) {
         ) {
             SmallAction(Icons.Outlined.ContentCopy, "Copy") { copy(m.content) }
             SmallAction(Icons.Outlined.Share, "Share") { shareText(context, m.content) }
-            SmallAction(Icons.Outlined.Speaker, "Play on speaker") { vm.speakOnEsp(m.content) }
+            SmallAction(Icons.Outlined.Tv, "Show on ESP32 screen") { vm.showOnScreen(m.content) }
             SmallAction(Icons.Outlined.PhoneAndroid, "Read on phone") { vm.speakOnPhone(m.content) }
             if (isLast) SmallAction(Icons.Outlined.Refresh, "Regenerate") { vm.regenerate() }
             m.usage?.let { u ->
@@ -525,9 +525,7 @@ private fun Composer(vm: MainViewModel, text: String, onText: (String) -> Unit, 
         // where answers play + device state
         Row(Modifier.padding(start = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             val icon = when (s.route) {
-                Route.SPEAKER -> Icons.Outlined.Speaker
-                Route.PHONE -> Icons.Outlined.PhoneAndroid
-                Route.BOTH -> Icons.AutoMirrored.Outlined.VolumeUp
+                Route.PHONE -> Icons.AutoMirrored.Outlined.VolumeUp
                 Route.SILENT -> Icons.AutoMirrored.Outlined.VolumeOff
             }
             Row(
@@ -549,15 +547,15 @@ private fun Composer(vm: MainViewModel, text: String, onText: (String) -> Unit, 
             }
             Spacer(Modifier.width(10.dp))
             val state = when {
-                vm.device?.state == "speaking" && vm.deviceOnline -> "Speaking on speaker"
+                vm.device?.state == "showing" && vm.deviceOnline -> "Showing on screen"
+                vm.deviceOnline && vm.device?.sensors?.petting == true -> "Being petted ♥"
                 s.mode == Mode.DIRECT && !vm.pcOnline -> "PC / Ollama offline"
                 s.mode == Mode.ESP32 && !vm.deviceOnline -> "ESP32 offline"
                 s.mode == Mode.ESP32 && vm.device?.ollamaOnline == false -> "ESP32 can't reach Ollama"
-                s.route.onSpeaker && s.espHost.isBlank() -> "Speaker not set up"
                 else -> ""
             }
             Text(state, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (state == "Speaking on speaker") {
+            if (state == "Showing on screen") {
                 Text(
                     "Stop", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { vm.stopAudio() }.padding(6.dp),

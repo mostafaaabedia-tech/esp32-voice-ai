@@ -1,21 +1,20 @@
 package com.voiceai.esp32.data
 
 const val DEFAULT_SYSTEM_PROMPT =
-    "You are a helpful voice assistant running on a small ESP32 speaker. " +
+    "You are a cute, helpful AI assistant living in a small ESP32 robot with an OLED face. " +
         "Answer clearly and briefly in plain sentences. No markdown, no emojis, no lists."
 
 /** How the phone reaches the AI. */
 enum class Mode(val label: String, val hint: String) {
-    DIRECT("Direct to PC", "Fastest. Phone talks to Ollama, words appear live, ESP32 speaks the answer."),
-    ESP32("Through ESP32", "Like your first code. ESP32 asks Ollama and speaks the answer."),
+    DIRECT("Direct to PC", "Fastest. Phone talks to Ollama, words appear live, the ESP32 face shows the answer."),
+    ESP32("Through ESP32", "Like your first code. ESP32 asks Ollama and shows the answer on its screen."),
 }
 
-/** Where answers are played. */
+/** Read answers out loud on the phone, or not. (The ESP32 screen always shows them.) */
 enum class Route(val label: String) {
-    SPEAKER("Speaker"), PHONE("Phone"), BOTH("Speaker + phone"), SILENT("Silent");
+    PHONE("Read aloud"), SILENT("Silent");
 
-    val onSpeaker get() = this == SPEAKER || this == BOTH
-    val onPhone get() = this == PHONE || this == BOTH
+    val onPhone get() = this == PHONE
 }
 
 /** Quick personalities: one tap changes how the AI answers. */
@@ -32,7 +31,7 @@ data class AppSettings(
     val espHost: String = "",
     val pcHost: String = "192.168.80.189",
     val mode: Mode = Mode.DIRECT,
-    val route: Route = Route.SPEAKER,
+    val route: Route = Route.PHONE,
     val lang: String = "en-US",
     val autoSend: Boolean = true,
     val history: Int = 8,
@@ -95,12 +94,23 @@ data class DeviceInfo(
     val models: List<String>,
     val ollamaHost: String,
     val model: String,
-    val voiceMode: Int,
-    val volume: Float,
     val numCtx: Int,
     val sessionRequests: Int,
     val sessionPrompt: Long,
     val sessionCompletion: Long,
     val minHeap: Long = 0,
     val lastReset: String = "",
+    val sensors: Sensors = Sensors(),
+)
+
+/** Ultrasonic + IR sensors on the ESP32 */
+data class Sensors(
+    val ultrasonic: Boolean = false,
+    val twoSensors: Boolean = false,
+    val distanceCm: Int = -1,
+    val person: Boolean = false,
+    val ir: Boolean = false,
+    val petting: Boolean = false,
+    val pets: Int = 0,
+    val love: Int = 0,
 )

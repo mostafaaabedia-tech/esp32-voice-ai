@@ -7,6 +7,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 /** Android speech recognition with live partial results. Use from the main thread. */
@@ -102,13 +103,35 @@ class VoiceInput(private val context: Context) {
 /** Phone text-to-speech. */
 class PhoneVoice(context: Context) {
     private var ready = false
-    private val tts = TextToSpeech(context.applicationContext) { status -> ready = status == TextToSpeech.SUCCESS }
+    private var length = 0
+
+    /** Called while speaking: (position in the text, text length). Used to sync the OLED subtitles. */
+    var onProgress: ((Int, Int) -> Unit)? = null
+    var onDone: (() -> Unit)? = null
+
+    private val tts = TextToSpeech(context.applicationContext) { status ->
+        ready = status == TextToSpeech.SUCCESS
+        if (ready) runCatching { setListener() }
+    }
+
+    private fun setListener() {
+        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) { onDone?.invoke() }
+            @Deprecated("old API") override fun onError(utteranceId: String?) { onDone?.invoke() }
+            override fun onRangeStart(utteranceId: String?, start: Int, end: Int, frame: Int) {
+                onProgress?.invoke(start, length)
+            }
+        })
+    }
 
     fun speak(text: String, lang: String): Boolean {
         if (!ready) return false
         return runCatching {
             tts.language = Locale.forLanguageTag(lang)
-            tts.speak(text.take(TextToSpeech.getMaxSpeechInputLength() - 1), TextToSpeech.QUEUE_FLUSH, null, "voiceai")
+            val t = text.take(TextToSpeech.getMaxSpeechInputLength() - 1)
+            length = t.length
+            tts.speak(t, TextToSpeech.QUEUE_FLUSH, null, "voiceai")
             true
         }.getOrDefault(false)
     }
