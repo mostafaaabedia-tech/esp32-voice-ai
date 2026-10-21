@@ -37,6 +37,35 @@ The app also shows token usage for every answer, like the usage pages of cloud A
 | **Direct to PC** (default) | Phone → Ollama on the PC. The answer streams in live, then the phone sends it to the ESP32 screen. | Fastest: words appear as they are generated |
 | **Through ESP32** | Phone → ESP32 → Ollama (like the original sketch). The ESP32 shows the answer. | Works even if only the ESP32 knows the PC address |
 
+## Works offline
+
+The app needs **no internet**:
+- **Listening:** speech recognition is built into the app (sherpa-onnx streaming Zipformer, English).
+- **Speaking:** a built-in voice pack with **8 voices** (KittenTTS). You can change pitch and speed in *Settings → Your AI companion*.
+- **Thinking:** the AI brain is Ollama on your PC, reached over your own WiFi.
+- **Without the PC:** spells, timers, the time and date, fortunes, jokes, dice and coin flips all still work on the phone.
+
+The built-in voice and listening are English. For other languages the app falls back to the phone's own speech service.
+
+APKs:
+- [`VoiceAI.apk`](https://github.com/mostafaaabedia-tech/esp32-voice-ai/raw/apk/VoiceAI.apk) for most phones (64‑bit).
+- [`VoiceAI-32bit.apk`](https://github.com/mostafaaabedia-tech/esp32-voice-ai/raw/apk/VoiceAI-32bit.apk) for older phones.
+
+## The wizard
+
+The default companion is **Zephyr**, an original young apprentice wizard. He has a starry hat, a robe, a wand with a glowing star, and **Pip**, a little floating light. **Nova** can still be chosen in Settings.
+
+- **8 spells** on the phone and the OLED: Starburst, Float, Rainbow, Snowfall, Fireworks, Bubbles, Vanish and Dream dust. Tap ✨ Spells, or say "cast a spell" / "show me some magic". The AI also casts them by itself when it fits.
+- **Petting** (IR sensor or rubbing his hat on the screen): the hat squashes, stars fly, and he says one of his own magical lines.
+- **Quick buttons:** 🔮 Fortune, ⏳ Timer (an hourglass countdown on the OLED and "TIME'S UP!"), 😄 Joke, 🎲 Dice, 🪙 Coin.
+- **OLED wizard theme:**
+  - a hat on the eyes;
+  - a crescent‑moon boot screen;
+  - spell animations with a waving wand;
+  - an hourglass timer.
+
+  Switching the character in the app also switches the OLED theme.
+
 ## Your AI companion (app home screen)
 
 The app opens on **Nova**, an original anime‑style AI companion. You can rename her and change her hair and eye colours. She lives in your phone and in the ESP32:
