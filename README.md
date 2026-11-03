@@ -126,6 +126,15 @@ The status bar shows WiFi, AI online, how far you are (cm), and a heart that gro
 - Chat list with **search, rename, share/export, delete**
 - **Settings → ESP32 face**: live sensor view (distance, person, petting, pets, love meter) and subtitle speed
 
+## Network page (change WiFi from the phone)
+
+Open the menu → **Network** (or Settings → *How to reach the AI* → Network).
+
+- **Find ESP32 and PC**: searches the phone's WiFi (and the phone's own hotspot) for the ESP32 and for the PC running Ollama. Tap **Use** and the address is set, no typing. Takes about 5–10 seconds.
+- **Places**: save the current addresses as *Home*, *School*… Next time you are there, one tap switches everything.
+- **ESP32 WiFi**: see which WiFi the ESP32 is on and how strong it is, tap **Show WiFi networks near the ESP32**, pick one, type the password. The ESP32 saves it, restarts and joins it (≈15 s), then the app finds it again. Hidden networks: **＋ Hidden / other network**. Up to 5 networks are saved; at start the ESP32 joins the strongest one around. **forget** removes one.
+- **Setup mode**: if the ESP32 can't join any saved WiFi, it makes its own WiFi **VoiceAI-Setup** (password **voiceai123**) and the OLED shows the steps. Connect the phone to it (choose *stay connected* when Android says "no internet"), tap **I'm connected to VoiceAI-Setup**, then pick your WiFi. While nobody is on the setup WiFi, the ESP32 keeps retrying your known networks every 90 s.
+
 ## 1. Wiring
 
 ### OLED (1.5" 128x128)
@@ -245,3 +254,7 @@ Voice input uses Android's speech service (Google app).
 | `POST /api/stop` | – | Stops showing |
 | `POST /api/face` | `{"state":"listening"}` (or `thinking`, `error`, `idle`, optional `"text"`), or `{"state":"emotion","emotion":"love","ms":4000}` | Sets the OLED face |
 | `POST /api/config` | Any of `ollama_host, ollama_port, model, system_prompt, max_words, num_predict, num_ctx, read_ms_per_char` | Saved in flash |
+| `GET /api/wifi` | – | `{"connected","ssid","ip","rssi","setup_mode","setup_ssid","saved":[...],"default"}` |
+| `GET /api/wifi/scan` | – | `{"scanning":true}` while looking, then `{"scanning":false,"networks":[{"ssid","rssi","secure"}]}` |
+| `POST /api/wifi` | `{"ssid":"Home","password":"..."}` | Saves the network first in the list and restarts to join it |
+| `POST /api/wifi/forget` | `{"ssid":"Home"}` | Removes a saved network |

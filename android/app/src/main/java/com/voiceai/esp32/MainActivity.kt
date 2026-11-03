@@ -79,7 +79,9 @@ import androidx.core.content.ContextCompat
 import com.voiceai.esp32.ui.ChatScreen
 import com.voiceai.esp32.ui.CompanionScreen
 import androidx.compose.material.icons.outlined.Face
+import androidx.compose.material.icons.outlined.Wifi
 import com.voiceai.esp32.ui.BrandHeader
+import com.voiceai.esp32.ui.NetworkScreen
 import com.voiceai.esp32.ui.SettingsScreen
 import com.voiceai.esp32.ui.UsageScreen
 import com.voiceai.esp32.ui.VoiceAITheme
@@ -211,7 +213,7 @@ private fun App(vm: MainViewModel) {
 
     // ------------------------------------------------------------------ back
     BackHandler(enabled = drawer.isOpen) { scope.launch { drawer.close() } }
-    BackHandler(enabled = !drawer.isOpen && (vm.screen == Screen.USAGE || vm.screen == Screen.SETTINGS)) { vm.screen = vm.home }
+    BackHandler(enabled = !drawer.isOpen && (vm.screen == Screen.USAGE || vm.screen == Screen.SETTINGS || vm.screen == Screen.NETWORK)) { vm.screen = vm.home }
     BackHandler(enabled = !drawer.isOpen && vm.screen == Screen.CHAT) { vm.screen = Screen.COMPANION }
 
     ModalNavigationDrawer(
@@ -231,6 +233,7 @@ private fun App(vm: MainViewModel) {
             Screen.CHAT -> ChatScreen(vm, onMenu = { scope.launch { drawer.open() } }, onMic = onMic)
             Screen.USAGE -> UsageScreen(vm) { vm.screen = vm.home }
             Screen.SETTINGS -> SettingsScreen(vm) { vm.screen = vm.home }
+            Screen.NETWORK -> NetworkScreen(vm) { vm.screen = vm.home }
         }
     }
 
@@ -337,6 +340,7 @@ private fun DrawerContent(vm: MainViewModel, close: () -> Unit) {
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         DrawerLink(Icons.Outlined.BarChart, "Usage") { vm.screen = Screen.USAGE; close() }
+        DrawerLink(Icons.Outlined.Wifi, "Network") { vm.screen = Screen.NETWORK; close() }
         DrawerLink(Icons.Outlined.Settings, "Settings") { vm.screen = Screen.SETTINGS; close() }
     }
 

@@ -120,6 +120,9 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Field("PC address (Ollama)", pcHost, "192.168.80.189", KeyboardType.Uri) { pcHost = it }
                 Field("ESP32 address (face)", espHost, "192.168.80.45", KeyboardType.Uri) { espHost = it }
+                TextButton(onClick = { saveLocal(); vm.screen = com.voiceai.esp32.Screen.NETWORK }) {
+                    Text("📶 Network: find devices, places, change the ESP32's WiFi")
+                }
                 Button(
                     onClick = {
                         saveLocal(); checking = true

@@ -16,6 +16,13 @@ import kotlin.coroutines.coroutineContext
 
 class ApiException(message: String) : Exception(message)
 
+data class EspWifi(
+    val connected: Boolean, val ssid: String, val ip: String, val rssi: Int,
+    val setupMode: Boolean, val saved: List<String>, val default: String,
+)
+
+data class WifiNet(val ssid: String, val rssi: Int, val secure: Boolean)
+
 data class SenseResult(val seq: Long, val sensors: Sensors, val lookX: Float, val events: List<String>)
 
 /** Plain HttpURLConnection client: no extra libraries needed. */
@@ -163,6 +170,79 @@ object Api {
             events = (0 until ev.length()).map { ev.getJSONObject(it).optString("type") },
         )
     }
+
+    // ------------------------------------------------------------ ESP32 WiFi
+    /** Which network the ESP32 uses, its saved networks, and setup mode. */
+    suspend fun espWifi(host: String): EspWifi {
+        val (code, text) = try {
+            request("GET", base(host) + "/api/wifi", timeoutMs = 3500)
+        } catch (e: IOException) {
+            throw ApiException("Can't reach the ESP32 at $host")
+        }
+        if (code == 404) throw ApiException("Update the ESP32 firmware (4.1 or newer) to change its WiFi from the app.")
+        if (code != 200) throw ApiException(errorOf(text, code))
+        val j = JSONObject(text)
+        val a = j.optJSONArray("saved") ?: JSONArray()
+        return EspWifi(
+            connected = j.optBoolean("connected"), ssid = j.optString("ssid"), ip = j.optString("ip"), rssi = j.optInt("rssi"),
+            setupMode = j.optBoolean("setup_mode"), saved = (0 until a.length()).map { a.getString(it) },
+            default = j.optString("default"),
+        )
+    }
+
+    /** WiFi networks the ESP32 can see (it takes a few seconds). */
+    suspend fun espWifiScan(host: String): List<WifiNet> {
+        val start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < 20_000) {
+            val (code, text) = try {
+                request("GET", base(host) + "/api/wifi/scan", timeoutMs = 4000)
+            } catch (e: IOException) {
+                throw ApiException("Can't reach the ESP32 at $host")
+            }
+            if (code != 200) throw ApiException(errorOf(text, code))
+            val j = JSONObject(text)
+            if (!j.optBoolean("scanning")) {
+                val a = j.optJSONArray("networks") ?: JSONArray()
+                return (0 until a.length()).map {
+                    val o = a.getJSONObject(it)
+                    WifiNet(o.optString("ssid"), o.optInt("rssi"), o.optBoolean("secure", true))
+                }.sortedByDescending { it.rssi }
+            }
+            delay(1200)
+        }
+        throw ApiException("The ESP32 didn't finish the WiFi scan")
+    }
+
+    /** Save a network on the ESP32; it restarts and joins it. */
+    suspend fun espWifiSet(host: String, ssid: String, password: String) {
+        val (code, text) = try {
+            request("POST", base(host) + "/api/wifi", JSONObject().put("ssid", ssid).put("password", password), 6000)
+        } catch (e: IOException) {
+            throw ApiException("Can't reach the ESP32 at $host")
+        }
+        if (code != 200) throw ApiException(errorOf(text, code))
+    }
+
+    suspend fun espWifiForget(host: String, ssid: String) {
+        val (code, text) = try {
+            request("POST", base(host) + "/api/wifi/forget", JSONObject().put("ssid", ssid))
+        } catch (e: IOException) {
+            throw ApiException("Can't reach the ESP32 at $host")
+        }
+        if (code != 200) throw ApiException(errorOf(text, code))
+    }
+
+    /** Quick check used by the network scanner: is there a VoiceAI ESP32 at this address? */
+    suspend fun probeEsp(ip: String): DeviceInfo? = runCatching {
+        val (code, text) = request("GET", "http://$ip/api/info", timeoutMs = 1500)
+        if (code != 200 || !text.contains("\"fw\"")) null else espInfo(ip)
+    }.getOrNull()
+
+    /** Quick check: is Ollama running at this address? Returns the number of models. */
+    suspend fun probeOllama(ip: String): Int? = runCatching {
+        val (code, text) = request("GET", "http://$ip:11434/api/tags", timeoutMs = 1500)
+        if (code != 200) null else (JSONObject(text).optJSONArray("models")?.length() ?: 0)
+    }.getOrNull()
 
     suspend fun espStop(host: String) {
         runCatching { request("POST", base(host) + "/api/stop", JSONObject(), 3000) }

@@ -25,9 +25,10 @@
 #include "types.h"
 #include "web_page.h"
 #include "sensors.h"
+#include "wifi_setup.h"
 #include "oled.h"
 
-#define FW_VERSION "4.0.0"
+#define FW_VERSION "4.1.0"
 #define MAX_BODY_BYTES 16384
 
 // loop() runs the AI request; give it more stack than the 8 KB default
@@ -254,6 +255,8 @@ FaceInfo getFaceInfo() {
   FaceInfo f;
   uint32_t now = millis();
   f.wifiOk = WiFi.status() == WL_CONNECTED;
+  f.apMode = netw::apMode;
+  strlcpy(f.wifiName, netw::trying.c_str(), sizeof f.wifiName);
   f.rssi = f.wifiOk ? WiFi.RSSI() : 0;
   if (f.wifiOk) strlcpy(f.ip, WiFi.localIP().toString().c_str(), sizeof f.ip);
   f.s = sense::get();
@@ -375,6 +378,7 @@ void setupRoutes() {
     LOCK();
     d["name"] = DEVICE_HOSTNAME;
     d["fw"] = FW_VERSION;
+    d["wifi"] = WiFi.SSID();
     d["ip"] = WiFi.localIP().toString();
     d["rssi"] = WiFi.RSSI();
     d["heap"] = ESP.getFreeHeap();
@@ -595,6 +599,67 @@ void setupRoutes() {
     r->send(200, "application/json", "{\"ok\":true}");
   }, nullptr, collectBody);
 
+  // ---------------------------------------------------------- WiFi (app -> Network)
+  // (the longer paths first: "/api/wifi" would also catch "/api/wifi/scan")
+  // nearby networks: first call starts a scan, call again until "scanning" is false
+  server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *r) {
+    JsonDocument d;
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); d["scanning"] = true; return sendJson(r, 200, d); }
+    if (n == WIFI_SCAN_RUNNING) { d["scanning"] = true; return sendJson(r, 200, d); }
+    d["scanning"] = false;
+    JsonArray a = d["networks"].to<JsonArray>();
+    for (int i = 0; i < n; i++) {
+      String ss = WiFi.SSID(i);
+      if (!ss.length()) continue;
+      bool dup = false;
+      for (JsonObject o : a) if (o["ssid"] == ss) { dup = true; if (WiFi.RSSI(i) > (int)o["rssi"]) o["rssi"] = WiFi.RSSI(i); }
+      if (dup) continue;
+      JsonObject o = a.add<JsonObject>();
+      o["ssid"] = ss;
+      o["rssi"] = WiFi.RSSI(i);
+      o["secure"] = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+    }
+    WiFi.scanDelete();
+    sendJson(r, 200, d);
+  });
+
+  // forget a saved network: {"ssid":"Home"}
+  server.on("/api/wifi/forget", HTTP_POST, [](AsyncWebServerRequest *r) {
+    JsonDocument in;
+    if (deserializeJson(in, bodyOf(r)) || !in["ssid"].is<const char *>()) return sendError(r, 400, "Need {ssid}");
+    bool ok = netw::forget(in["ssid"].as<String>());
+    r->send(200, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  }, nullptr, collectBody);
+
+  // which network, saved networks, setup mode
+  server.on("/api/wifi", HTTP_GET, [](AsyncWebServerRequest *r) {
+    JsonDocument d;
+    bool on = WiFi.status() == WL_CONNECTED;
+    d["connected"] = on;
+    d["ssid"] = on ? WiFi.SSID() : String();
+    d["ip"] = on ? WiFi.localIP().toString() : String();
+    d["rssi"] = on ? WiFi.RSSI() : 0;
+    d["setup_mode"] = (bool)netw::apMode;
+    d["setup_ssid"] = SETUP_AP_SSID;
+    JsonArray a = d["saved"].to<JsonArray>();
+    for (int i = 0; i < netw::nSaved; i++) a.add(netw::saved[i].ssid);
+    if (strlen(WIFI_SSID)) d["default"] = WIFI_SSID;
+    sendJson(r, 200, d);
+  });
+
+  // join a new network: {"ssid":"Home","password":"..."}  (saved, then the ESP32 restarts)
+  server.on("/api/wifi", HTTP_POST, [](AsyncWebServerRequest *r) {
+    JsonDocument in;
+    if (deserializeJson(in, bodyOf(r)) || !in["ssid"].is<const char *>()) return sendError(r, 400, "Need {ssid, password}");
+    String ss = in["ssid"].as<String>(), pw = in["password"] | "";
+    if (ss.isEmpty() || ss.length() > 32) return sendError(r, 400, "WiFi name must be 1-32 characters");
+    if (pw.length() && (pw.length() < 8 || pw.length() > 63)) return sendError(r, 400, "WiFi password must be 8-63 characters");
+    netw::add(ss, pw);
+    netw::restartAt = millis() + 1500;        // answer the phone first
+    r->send(200, "application/json", "{\"ok\":true,\"restarting\":true}");
+  }, nullptr, collectBody);
+
   server.onNotFound([](AsyncWebServerRequest *r) {
     if (r->method() == HTTP_OPTIONS) r->send(204);   // CORS preflight
     else r->send(404, "application/json", "{\"error\":\"not found\"}");
@@ -603,20 +668,9 @@ void setupRoutes() {
 
 // ------------------------------------------------------------------- setup --
 void connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(DEVICE_HOSTNAME);
-  WiFi.setSleep(false);                      // faster replies
-  WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("[wifi] connecting");
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    ledSet((millis() / 150) % 2);
-    delay(150);
-    if (millis() - t0 > 30000) { Serial.println("\n[wifi] failed, rebooting"); ESP.restart(); }
-  }
+  ledSet(true);
+  netw::begin();                             // saved networks, config.h, or the setup hotspot
   ledSet(false);
-  Serial.printf("\n[wifi] connected, IP %s  RSSI %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
 }
 
 void setup() {
@@ -658,6 +712,7 @@ void showNow(const String &raw) {
 }
 
 void loop() {
+  netw::tick();                              // new WiFi from the app / setup hotspot
   // 1) finished showing the answer? (2.5 s after the last word, or the phone said done)
   LOCK();
   if (state == ST_SPEAKING) {
@@ -724,8 +779,10 @@ void loop() {
   if (millis() - lastHealthCheck > 15000 || lastHealthCheck == 0) {
     lastHealthCheck = millis();
     if (WiFi.status() != WL_CONNECTED) {
-      Serial.println("[wifi] lost, reconnecting");
-      WiFi.reconnect();
+      if (!netw::apMode) {
+        Serial.println("[wifi] lost, reconnecting");
+        WiFi.reconnect();
+      }
     } else {
       checkOllama();
     }

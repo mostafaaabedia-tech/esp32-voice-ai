@@ -12,8 +12,8 @@ android {
         applicationId = "com.voiceai.esp32"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "8.0"
+        versionCode = 14
+        versionName = "8.1"
     }
 
     buildTypes {

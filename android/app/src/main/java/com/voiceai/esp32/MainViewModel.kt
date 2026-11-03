@@ -13,6 +13,10 @@ import com.voiceai.esp32.data.AppSettings
 import com.voiceai.esp32.data.Chat
 import com.voiceai.esp32.data.DeviceInfo
 import com.voiceai.esp32.data.Message
+import com.voiceai.esp32.data.NetProfile
+import com.voiceai.esp32.net.EspWifi
+import com.voiceai.esp32.net.NetScan
+import com.voiceai.esp32.net.WifiNet
 import com.voiceai.esp32.data.Mode
 import com.voiceai.esp32.data.Persona
 import com.voiceai.esp32.data.Store
@@ -31,7 +35,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-enum class Screen { COMPANION, CHAT, USAGE, SETTINGS }
+enum class Screen { COMPANION, CHAT, USAGE, SETTINGS, NETWORK }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val store = Store(app)
@@ -187,6 +191,146 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 toast = e.message
             }
         }
+    }
+
+    // ---------------------------------------------------------------- network
+    val profiles = mutableStateListOf<NetProfile>().apply { addAll(store.loadProfiles()) }
+    var scanning by mutableStateOf(false); private set
+    var scanProgress by mutableIntStateOf(0); private set
+    var foundEsps by mutableStateOf(listOf<NetScan.FoundEsp>()); private set
+    var foundPcs by mutableStateOf(listOf<NetScan.FoundPc>()); private set
+    var scannedOnce by mutableStateOf(false); private set
+    var espWifi by mutableStateOf<EspWifi?>(null); private set
+    var wifiNets by mutableStateOf<List<WifiNet>?>(null); private set
+    var wifiScanning by mutableStateOf(false); private set
+    /** What is happening while the ESP32 changes network (null = nothing). */
+    var wifiBusy by mutableStateOf<String?>(null); private set
+    var setupMode by mutableStateOf(false); private set
+    private var hostBeforeSetup = ""
+
+    /** Look for the ESP32 and the PC on the phone's network. [auto] = use them if there is only one. */
+    fun findDevices(auto: Boolean = false) {
+        if (scanning) return
+        scanning = true
+        scanProgress = 0
+        viewModelScope.launch {
+            val (esps, pcs) = NetScan.scan { scanProgress = it }
+            foundEsps = esps
+            foundPcs = pcs
+            scanning = false
+            scannedOnce = true
+            if (auto) {
+                if (esps.size == 1 && esps[0].ip != settings.espHost) useEsp(esps[0].ip)
+                if (pcs.size == 1 && pcs[0].ip != settings.pcHost.substringBefore(':')) usePc(pcs[0].ip)
+            }
+            toast = when {
+                esps.isEmpty() && pcs.isEmpty() -> "Nothing found. Is the phone on the same WiFi as the ESP32 and the PC?"
+                else -> "Found ${esps.size} ESP32 and ${pcs.size} PC" + if (pcs.size == 1) "" else "s"
+            }
+        }
+    }
+
+    fun useEsp(ip: String) {
+        updateSettings(settings.copy(espHost = ip))
+        viewModelScope.launch { refreshStatus(); loadEspWifi(quiet = true); pushToDevice(quiet = true) }
+    }
+
+    fun usePc(ip: String) {
+        updateSettings(settings.copy(pcHost = ip))
+        pushToDevice(quiet = true)                       // the ESP32 asks the same PC
+        viewModelScope.launch { refreshStatus() }
+    }
+
+    fun saveProfile(name: String) {
+        val n = name.trim().ifBlank { return }
+        profiles.removeAll { it.name.equals(n, true) }
+        profiles.add(0, NetProfile(n, settings.pcHost, settings.espHost))
+        store.saveProfiles(profiles.toList())
+        toast = "Saved \"$n\""
+    }
+
+    fun applyProfile(p: NetProfile) {
+        updateSettings(settings.copy(pcHost = p.pcHost, espHost = p.espHost))
+        pushToDevice(quiet = true)
+        viewModelScope.launch { refreshStatus(); loadEspWifi(quiet = true) }
+        toast = "Using \"${p.name}\""
+    }
+
+    fun deleteProfile(p: NetProfile) {
+        profiles.remove(p)
+        store.saveProfiles(profiles.toList())
+    }
+
+    /** Which WiFi the ESP32 is on. */
+    fun loadEspWifi(quiet: Boolean = false) {
+        val host = settings.espHost
+        if (host.isBlank()) return
+        viewModelScope.launch {
+            try { espWifi = Api.espWifi(host) } catch (e: Exception) { espWifi = null; if (!quiet) toast = e.message }
+        }
+    }
+
+    /** WiFi networks the ESP32 can see. */
+    fun scanEspWifi() {
+        val host = settings.espHost
+        if (host.isBlank() || wifiScanning) return
+        wifiScanning = true
+        viewModelScope.launch {
+            try { wifiNets = Api.espWifiScan(host) } catch (e: Exception) { toast = e.message }
+            wifiScanning = false
+        }
+    }
+
+    /** Send a new WiFi to the ESP32. It restarts, joins it, and the app looks for it again. */
+    fun joinWifi(ssid: String, password: String) {
+        val host = settings.espHost
+        if (host.isBlank()) { toast = "Add the ESP32 address first"; return }
+        viewModelScope.launch {
+            wifiBusy = "Sending \"$ssid\" to the ESP32…"
+            try {
+                Api.espWifiSet(host, ssid, password)
+            } catch (e: Exception) {
+                toast = e.message
+                wifiBusy = null
+                return@launch
+            }
+            if (setupMode) exitSetup()
+            wifiBusy = "The ESP32 is restarting and joining \"$ssid\"…"
+            delay(16_000)
+            wifiBusy = "Looking for the ESP32 on your network…"
+            val (esps, pcs) = NetScan.scan { scanProgress = it }
+            foundEsps = esps
+            foundPcs = pcs
+            scannedOnce = true
+            if (esps.size == 1) useEsp(esps[0].ip)
+            wifiBusy = null
+            toast = if (esps.isNotEmpty()) "The ESP32 is on \"$ssid\" now (${esps[0].ip})"
+            else "Not found yet. Connect this phone to \"$ssid\" too, then tap Find."
+        }
+    }
+
+    fun forgetWifi(ssid: String) {
+        val host = settings.espHost
+        viewModelScope.launch {
+            try { Api.espWifiForget(host, ssid); loadEspWifi(quiet = true) } catch (e: Exception) { toast = e.message }
+        }
+    }
+
+    /** The ESP32 made its own hotspot "VoiceAI-Setup": talk to it at 192.168.4.1. */
+    fun enterSetup() {
+        val ok = NetScan.bindToWifi(getApplication(), true)
+        if (!ok) toast = "Connect this phone's WiFi to \"VoiceAI-Setup\" first"
+        if (!setupMode) hostBeforeSetup = settings.espHost
+        setupMode = true
+        updateSettings(settings.copy(espHost = "192.168.4.1"))
+        loadEspWifi()
+        scanEspWifi()
+    }
+
+    fun exitSetup() {
+        NetScan.bindToWifi(getApplication(), false)
+        setupMode = false
+        if (settings.espHost == "192.168.4.1" && hostBeforeSetup.isNotBlank()) updateSettings(settings.copy(espHost = hostBeforeSetup))
     }
 
     suspend fun refreshStatus() {

@@ -33,6 +33,9 @@ enum class CompanionType(val label: String, val defName: String, val hair: Strin
     NOVA("Nova", "Nova", "#8e74e6", "#d9577f", 7, 1.05f),
 }
 
+/** A saved place (home, school…): which PC and ESP32 addresses to use there. */
+data class NetProfile(val name: String, val pcHost: String, val espHost: String)
+
 /** English helper level: how simple the companion's English is. */
 enum class EnglishLevel(val label: String, val prompt: String, val words: Int) {
     BEGINNER("Beginner", "a beginner (A1-A2): use very common words and very short sentences", 25),

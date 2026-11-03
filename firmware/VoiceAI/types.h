@@ -54,5 +54,7 @@ struct FaceInfo {
   bool wizard = true;           // face theme: wizard hat + magic, or plain robot eyes
   int32_t timerLeftMs = -1;     // hourglass timer: ms left (-1 = no timer)
   uint32_t timerDoneMs = 0;     // when the timer ran out (0 = not yet)
+  bool apMode = false;          // no known WiFi: the ESP32 made its own setup hotspot
+  char wifiName[33] = "";       // network being joined
   SenseInfo s;                  // sensors
 };

@@ -24,6 +24,9 @@
 #pragma once
 #include "config.h"
 #include "types.h"
+// shown on the OLED in WiFi setup mode (same as wifi_setup.h)
+#define SETUP_AP_NAME "VoiceAI-Setup"
+#define SETUP_AP_PW "voiceai123"
 
 FaceInfo getFaceInfo();   // defined in VoiceAI.ino
 
@@ -505,7 +508,19 @@ void bootScreen(uint32_t t) {
   }
 }
 
-void wifiScreen(uint32_t now) {
+void wifiScreen(const FaceInfo &f, uint32_t now) {
+  if (f.apMode) {                                     // setup hotspot: tell the user what to do
+    centerText("WiFi setup", 4, AMBER, 2);
+    centerText("1. Phone WiFi:", 30, DIM);
+    centerText(SETUP_AP_NAME, 42, WHITE);
+    centerText("pass: " SETUP_AP_PW, 54, WHITE);
+    centerText("2. App > Network", 72, DIM);
+    centerText("   > Setup mode", 84, DIM);
+    centerText("3. Pick your WiFi", 100, DIM);
+    int r = 3 + (int)(2 * fabsf(sinf(now / 300.f)));
+    cv->fillCircle(64, 118, r, TEAL);
+    return;
+  }
   // spinner made of 8 dots with a fading tail
   int cx = 64, cy = 54;
   int head = (now / 90) % 8;
@@ -516,7 +531,7 @@ void wifiScreen(uint32_t now) {
     cv->fillCircle(cx + cosf(a) * 20, cy + sinf(a) * 20, 4 - age / 3, c);
   }
   centerText("Connecting", 92, WHITE);
-  centerText(WIFI_SSID, 106, DIM);
+  centerText(f.wifiName[0] ? f.wifiName : WIFI_SSID, 106, DIM);
 }
 
 void listeningExtras(uint32_t t) {
@@ -1026,7 +1041,7 @@ void frame(uint32_t now) {
       break;
 
     case FACE_WIFI:
-      wifiScreen(now);
+      wifiScreen(f, now);
       if (f.note[0]) centerText(f.note, 119, AMBER);
       break;
 

@@ -158,6 +158,18 @@ class Store(context: Context) {
         runCatching { talkFile.writeText(a.toString()) }
     }
 
+    /** Network profiles: Home, School… (PC + ESP32 address for each place). */
+    fun loadProfiles(): List<NetProfile> = runCatching {
+        val a = JSONArray(prefs.getString("profiles", "[]"))
+        (0 until a.length()).map { val o = a.getJSONObject(it); NetProfile(o.getString("n"), o.optString("pc"), o.optString("esp")) }
+    }.getOrDefault(emptyList())
+
+    fun saveProfiles(list: List<NetProfile>) {
+        val a = JSONArray()
+        list.take(12).forEach { a.put(JSONObject().put("n", it.name).put("pc", it.pcHost).put("esp", it.espHost)) }
+        prefs.edit().putString("profiles", a.toString()).apply()
+    }
+
     /** English words you looked up, with their meaning. */
     fun loadWords(): List<Pair<String, String>> = runCatching {
         val a = JSONArray(prefs.getString("words", "[]"))
