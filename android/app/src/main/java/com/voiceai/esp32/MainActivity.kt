@@ -58,6 +58,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import com.voiceai.esp32.voice.Cue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -118,6 +120,8 @@ private fun App(vm: MainViewModel) {
 
     // ------------------------------------------------------------ voice input
     val voice = remember { VoiceInput(context) }
+    val cue = remember { Cue() }
+    DisposableEffect(Unit) { onDispose { cue.release() } }
     var listening by remember { mutableStateOf(false) }
     var heard by remember { mutableStateOf("") }
     var level by remember { mutableFloatStateOf(0f) }
@@ -164,22 +168,24 @@ private fun App(vm: MainViewModel) {
 
     fun startListening() {
         voice.offline = vm.settings.offlineListen
+        voice.patienceMs = vm.settings.listenPatience
         if (!voice.available) { vm.toast = "No speech service. Turn on the offline voice in Settings, or install the Google app."; return }
         heard = ""; level = 0f; processing = false; listening = true
         vm.phoneVoice.stop()                                               // she stops talking when you start
         vm.face("listening")
-        armWatchdog(9000)                                                  // nobody spoke
+        if (vm.settings.listenCue) cue.beep()                               // a soft "ding": your turn to talk
+        armWatchdog(12000)                                                 // nobody spoke
         voice.start(
             vm.settings.lang,
-            onPartial = { heard = it; vm.faceHeard(it); if (!processing) armWatchdog(9000) },
+            onPartial = { heard = it; vm.faceHeard(it); if (!processing) armWatchdog(vm.settings.listenPatience + 9000L) },
             onLevel = { level = it },
             onFinal = { finish(true, it.ifBlank { heard }) },
             onFail = { msg ->
                 if (heard.isNotBlank()) finish(true, heard)
                 else { finish(false, ""); if (vm.screen != Screen.COMPANION) vm.toast = msg }
             },
-            onSpeechStart = { armWatchdog(15000) },                        // talking: allow a longer sentence
-            onSpeechEnd = { processing = true; armWatchdog(3500) },        // stopped talking: wait briefly for the result
+            onSpeechStart = { armWatchdog(45000) },                        // talking: allow long sentences and pauses
+            onSpeechEnd = { processing = true; armWatchdog(4000) },        // stopped talking: wait briefly for the result
         )
     }
 

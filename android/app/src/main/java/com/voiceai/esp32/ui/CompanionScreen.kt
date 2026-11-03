@@ -70,6 +70,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,6 +122,8 @@ fun CompanionScreen(
         else -> listOf(Color(0xFF0A0F24), Color(0xFF1B2050), Color(0xFF3A2F6E))
     }
     var typing by remember { mutableStateOf(false) }
+    var wordsDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(typing) { c.userTyping = typing }
     var showLog by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(sky))) {
@@ -172,7 +175,52 @@ fun CompanionScreen(
                     listening -> heard
                     else -> c.bubble
                 }
-                Bubble(text, listening, s.textScale, Modifier.align(Alignment.TopCenter).padding(horizontal = 18.dp, vertical = 6.dp))
+                Column(
+                    Modifier.align(Alignment.TopCenter).padding(horizontal = 18.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Bubble(text, listening, s.textScale, Modifier)
+                    if (!listening && c.bubble.isNotBlank()) {
+                        // English helper: hear it slower, Dari translation, word meanings
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Mini("🐢 Slower") { c.repeatSlow() }
+                            Mini(if (c.translating) "🌐 …" else "🌐 دری") { c.translate() }
+                            Mini("📖 Words") { wordsDialog = true }
+                        }
+                    }
+                    c.translation?.let { tr ->
+                        Text(
+                            tr, color = Color.White, fontSize = (16 * s.textScale).sp, lineHeight = (24 * s.textScale).sp,
+                            textAlign = TextAlign.Right,
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color(0xCC1D2A4A))
+                                .clickable { c.translationClose() }.padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                    }
+                    c.fix?.let { f ->
+                        Row(
+                            Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xE6E9FFF1))
+                                .clickable { vm.speakAnswer(f, null, showOnEsp = false, slow = true) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("✏️ Better English: ", color = Color(0xFF1E6B45), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(f, color = Color(0xFF1E3D2E), fontSize = 14.sp, modifier = Modifier.weight(1f, fill = false))
+                            Text("  🔊", fontSize = 14.sp)
+                        }
+                    }
+                    c.wordCard?.let { w ->
+                        Column(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xF2FFF7E0))
+                                .clickable { c.wordCard = null }.padding(12.dp),
+                        ) {
+                            Text("📒 ${w.word}", color = Color(0xFF5A3A00), fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            Text(w.meaning, color = Color(0xFF3D2A00), fontSize = 14.sp)
+                            Text(w.dari, color = Color(0xFF3D2A00), fontSize = 18.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Right)
+                            Text("“${w.example}”", color = Color(0xFF6B5320), fontSize = 13.sp)
+                        }
+                    }
+                    c.practice?.let { target -> PracticeCard(c, target) }
+                }
 
                 // little chips: sensors and her decisions
                 Column(
@@ -213,6 +261,9 @@ fun CompanionScreen(
                 Action("😄 Joke") { c.quick("joke") }
                 Action("🎲 Dice") { c.quick("dice") }
                 Action("🪙 Coin") { c.quick("coin") }
+                Action("🗣 Practice") { c.quick("practice") }
+                Action("📒 Word") { c.quick("word") }
+                Action("📚 My words") { wordsDialog = true }
             }
             AnimatedVisibility(spells) {
                 Row(
@@ -294,6 +345,23 @@ fun CompanionScreen(
         }
     }
 
+    if (wordsDialog) WordsDialog(c) { wordsDialog = false }
+    c.wordHelp?.let { (w, m) ->
+        AlertDialog(
+            onDismissRequest = { c.wordHelp = null },
+            title = { Text(w) },
+            text = {
+                if (m == null) Text("Looking it up…")
+                else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(m.substringBefore('|').trim(), fontSize = 16.sp)
+                    if (m.contains('|')) Text(m.substringAfter('|').trim(), fontSize = 20.sp, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Right)
+                }
+            },
+            confirmButton = { TextButton(onClick = { c.wordHelp = null }) { Text("Close") } },
+            dismissButton = { if (m != null) TextButton(onClick = { c.explainWord(w) }) { Text("🔊 Again") } },
+        )
+    }
+
     if (showLog) {
         AlertDialog(
             onDismissRequest = { showLog = false },
@@ -351,6 +419,91 @@ private fun Action(text: String, on: Boolean = false, onClick: () -> Unit) {
             .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(50))
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun Mini(text: String, onClick: () -> Unit) {
+    Text(
+        text, color = Color.White, fontSize = 13.sp,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0x77140F2E))
+            .border(1.dp, Color.White.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .clickable(onClick = onClick).padding(horizontal = 11.dp, vertical = 6.dp),
+    )
+}
+
+/** "Repeat after me": the sentence, how well you said each word, and buttons. */
+@Composable
+private fun PracticeCard(c: com.voiceai.esp32.companion.Companion, target: String) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xF2F3F0FF)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text("🗣 Repeat after me", color = Color(0xFF4B3A8F), fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        val sc = c.practiceScore
+        if (sc == null) Text(target, color = Color(0xFF231A45), fontSize = 19.sp, lineHeight = 26.sp)
+        else {
+            // green = you said it, red = practise this word
+            Text(
+                androidx.compose.ui.text.buildAnnotatedString {
+                    sc.words.forEach { (w, ok) ->
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = if (ok) Color(0xFF1E8A4C) else Color(0xFFD1453B), fontWeight = if (ok) FontWeight.Normal else FontWeight.Bold)) { append(w) }
+                        append(" ")
+                    }
+                },
+                fontSize = 19.sp, lineHeight = 26.sp,
+            )
+            Text("${sc.percent}%  " + "⭐".repeat((sc.percent / 34).coerceIn(0, 3)), color = Color(0xFF4B3A8F), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { c.sayPractice() }) { Text("🔁 Again") }
+            TextButton(onClick = { c.startPractice() }) { Text("➡️ Next") }
+            TextButton(onClick = { c.stopPractice() }) { Text("✕ Stop") }
+        }
+    }
+}
+
+private val COMMON = setOf(
+    "about", "after", "again", "could", "every", "first", "great", "their", "there", "these", "thing", "think",
+    "those", "today", "where", "which", "while", "would", "really", "little", "maybe", "should", "always", "because",
+    "people", "before", "friend", "something", "sometimes", "hello", "thanks", "please", "right", "other", "still",
+)
+
+/** Harder words in her last answer (tap one for the meaning) + your saved words. */
+@Composable
+private fun WordsDialog(c: com.voiceai.esp32.companion.Companion, onClose: () -> Unit) {
+    val words = remember(c.bubble) {
+        c.bubble.split(Regex("[^A-Za-z']+")).map { it.lowercase().trim('\'') }
+            .filter { it.length >= 5 && it !in COMMON }.distinct().take(12)
+    }
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Words") },
+        text = {
+            Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (words.isNotEmpty()) {
+                    Text("Tap a word to learn it:", fontSize = 13.sp)
+                    words.chunked(3).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            row.forEach { w -> TextButton(onClick = { onClose(); c.explainWord(w) }) { Text(w) } }
+                        }
+                    }
+                }
+                Text("📚 My words (${c.words.size})", fontWeight = FontWeight.SemiBold)
+                if (c.words.isEmpty()) Text("Words you look up are saved here.", fontSize = 13.sp)
+                c.words.toList().asReversed().forEach { (w, m) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).clickable { onClose(); c.explainWord(w) }) {
+                            Text(w, fontWeight = FontWeight.SemiBold)
+                            Text(m.substringBefore('|').trim(), fontSize = 12.sp)
+                            if (m.contains('|')) Text(m.substringAfter('|').trim(), fontSize = 14.sp)
+                        }
+                        Text("✕", modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { c.forgetWord(w) }.padding(8.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
     )
 }
 

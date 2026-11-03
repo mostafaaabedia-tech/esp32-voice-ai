@@ -22,6 +22,24 @@ class VoiceInput(private val context: Context) {
     /** Use the built-in offline recognizer (English). */
     var offline = true
 
+    private var onDeviceBroken = false
+
+    /** Android 13+: ask Google to download its offline English speech pack. */
+    fun downloadGooglePack(lang: String): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33 || !SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) return false
+        return runCatching {
+            val r = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            r.triggerModelDownload(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang))
+            main.postDelayed({ runCatching { r.destroy() } }, 3000)
+            onDeviceBroken = false
+            true
+        }.getOrDefault(false)
+    }
+
+    /** How long you may pause before your turn ends (ms). */
+    var patienceMs = 2200
+        set(v) { field = v; offlineListener.patienceMs = v }
+
     private fun useOffline(lang: String) = offline && lang.startsWith("en") && OfflineEngine.asrStatus != "not loaded" &&
         !OfflineEngine.asrStatus.startsWith("not available")
 
@@ -42,7 +60,10 @@ class VoiceInput(private val context: Context) {
             return
         }
         val r = try {
-            SpeechRecognizer.createSpeechRecognizer(context)
+            // Android 12+: Google's on-device recognizer (works offline once the English pack is downloaded)
+            if (android.os.Build.VERSION.SDK_INT >= 31 && !onDeviceBroken && SpeechRecognizer.isOnDeviceRecognitionAvailable(context))
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+            else SpeechRecognizer.createSpeechRecognizer(context)
         } catch (e: Exception) {
             onFail("Speech service could not start")
             return
@@ -67,12 +88,14 @@ class VoiceInput(private val context: Context) {
             }
 
             override fun onError(error: Int) {
+                if (error == 12 || error == 13) onDeviceBroken = true     // no English pack: use the normal recognizer next time
                 onFail(
                     when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Didn't catch that. Try again."
                         SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
                             "Speech needs internet, or download the offline speech pack in the Google app."
                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission is needed."
+                        12, 13 -> "Google's English speech pack is not downloaded. Use the built-in hearing, or download it in Settings."
                         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Speech service is busy. Try again."
                         else -> "Voice error ($error)"
                     }
@@ -86,8 +109,11 @@ class VoiceInput(private val context: Context) {
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
             // stop sooner after you finish talking
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // wait for real pauses: you can stop to think of a word
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, patienceMs.toLong())
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, (patienceMs - 300).toLong())
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500L)
         }
         try {
             r.startListening(intent)
@@ -201,4 +227,11 @@ class PhoneVoice(context: Context) {
     val speaking: Boolean get() = active || pack.active || (ready && runCatching { tts.isSpeaking }.getOrDefault(false))
 
     fun shutdown() = tts.shutdown()
+}
+
+/** A soft, short beep that says "your turn to talk". */
+class Cue {
+    private val tone = runCatching { android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 35) }.getOrNull()
+    fun beep() { runCatching { tone?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 120) } }
+    fun release() { runCatching { tone?.release() } }
 }

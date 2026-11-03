@@ -33,6 +33,13 @@ enum class CompanionType(val label: String, val defName: String, val hair: Strin
     NOVA("Nova", "Nova", "#8e74e6", "#d9577f", 7, 1.05f),
 }
 
+/** English helper level: how simple the companion's English is. */
+enum class EnglishLevel(val label: String, val prompt: String, val words: Int) {
+    BEGINNER("Beginner", "a beginner (A1-A2): use very common words and very short sentences", 25),
+    INTERMEDIATE("Intermediate", "an intermediate learner (B1): use clear everyday English and short sentences", 35),
+    ADVANCED("Advanced", "an advanced learner (B2+): speak naturally but clearly", 45),
+}
+
 /** How the companion behaves. */
 enum class Personality(val label: String, val prompt: String) {
     CHEERFUL("Cheerful", "bubbly, cheerful and playful; you love little jokes and get excited easily"),
@@ -74,13 +81,19 @@ data class AppSettings(
     val eyeColor: String = "#c98a2e",
     val hatColor: String = "#3b2f8f",
     val voicePitch: Float = 1.15f,
-    val voiceRate: Float = 1.0f,
+    val voiceRate: Float = 0.85f,          // a bit slower than normal: easier to follow
     val voiceName: String = "",
     val talkMode: Boolean = true,          // listen again after she answers
     // offline voice (built into the app)
     val offlineListen: Boolean = true,
     val offlineSpeak: Boolean = true,
     val offlineVoice: Int = 0,             // 0..7
+    // hearing + pacing
+    val listenPatience: Int = 2200,        // ms of silence before your turn ends (pauses while you think are OK)
+    val listenCue: Boolean = true,         // soft beep when the mic opens
+    // English helper (for learners in Afghanistan: Dari speakers)
+    val englishHelp: Boolean = true,
+    val englishLevel: EnglishLevel = EnglishLevel.BEGINNER,
 )
 
 data class Usage(

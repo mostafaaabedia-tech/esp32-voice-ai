@@ -58,6 +58,7 @@ import com.voiceai.esp32.data.Route
 import com.voiceai.esp32.data.Personality
 import com.voiceai.esp32.data.Chattiness
 import com.voiceai.esp32.data.CompanionType
+import com.voiceai.esp32.data.EnglishLevel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.size
@@ -216,7 +217,7 @@ fun SettingsScreen(vm: MainViewModel, onBack: () -> Unit) {
             BrandHeader()
             Spacer(Modifier.height(14.dp))
             Text(
-                "VoiceAI 6.0 · your questions go to your own PC. Nothing leaves your network.",
+                "VoiceAI 8.0 · your questions go to your own PC. Nothing leaves your network.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -326,6 +327,56 @@ private fun CompanionSettings(vm: MainViewModel) {
         }
         Switch(checked = s.offlineListen, onCheckedChange = { vm.updateSettings(vm.settings.copy(offlineListen = it)) })
     }
+    Text(
+        if (s.offlineListen) "Off = use Google's recognizer instead (better with accents; works offline once its English pack is downloaded)."
+        else "Using Google's recognizer. Download its English pack below to use it without internet.",
+        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, lineHeight = 16.sp,
+    )
+    if (!s.offlineListen && android.os.Build.VERSION.SDK_INT >= 33) {
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        TextButton(onClick = {
+            val ok = com.voiceai.esp32.voice.VoiceInput(ctx).downloadGooglePack(s.lang)
+            vm.toast = if (ok) "Downloading Google's English speech pack…" else "This phone can't download Google's pack. Install 'Speech Recognition & Synthesis from Google'."
+        }) { Text("⬇ Download Google's English speech pack") }
+    }
+
+    // ----------------------------------------------------- hearing + pacing
+    Spacer(Modifier.height(12.dp))
+    Label("Wait for me (pause before your turn ends)")
+    Segmented(listOf(1400, 2200, 3200), s.listenPatience, { when (it) { 1400 -> "Short"; 2200 -> "Normal"; else -> "Long" } }) {
+        vm.updateSettings(vm.settings.copy(listenPatience = it))
+    }
+    Text(
+        "Longer = you can stop to think of a word and she won't interrupt you.",
+        fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp),
+    )
+    Spacer(Modifier.height(10.dp))
+    Label("Speaking speed")
+    Segmented(listOf(0.7f, 0.85f, 1.0f), listOf(0.7f, 0.85f, 1.0f).minByOrNull { kotlin.math.abs(it - s.voiceRate) }!!, {
+        when (it) { 0.7f -> "🐢 Slow"; 0.85f -> "Normal"; else -> "Fast" }
+    }) { vm.updateSettings(vm.settings.copy(voiceRate = it)) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("Beep when it's your turn", fontSize = 15.sp)
+            Text("A soft sound when the mic opens", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = s.listenCue, onCheckedChange = { vm.updateSettings(vm.settings.copy(listenCue = it)) })
+    }
+
+    // ----------------------------------------------------- English helper
+    Spacer(Modifier.height(16.dp))
+    Label("English helper")
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Help me learn English", fontSize = 15.sp)
+            Text("Simple English, corrects your sentences, Dari translation and word meanings", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = s.englishHelp, onCheckedChange = { vm.updateSettings(vm.settings.copy(englishHelp = it)) })
+    }
+    if (s.englishHelp) {
+        Spacer(Modifier.height(6.dp))
+        Segmented(EnglishLevel.entries, s.englishLevel, { it.label }) { vm.updateSettings(vm.settings.copy(englishLevel = it)) }
+    }
     if (s.offlineSpeak) {
         Spacer(Modifier.height(6.dp))
         VOICE_NAMES.forEachIndexed { i, label ->
@@ -354,7 +405,7 @@ private fun CompanionSettings(vm: MainViewModel) {
     Spacer(Modifier.height(14.dp))
     Label("Voice pitch  ${"%.2f".format(s.voicePitch)}")
     Slider(value = s.voicePitch, onValueChange = { vm.updateSettings(vm.settings.copy(voicePitch = (it * 20).toInt() / 20f)) }, valueRange = 0.6f..1.8f)
-    Label("Voice speed  ${"%.2f".format(s.voiceRate)}")
+    Label("Voice speed (fine)  ${"%.2f".format(s.voiceRate)}")
     Slider(value = s.voiceRate, onValueChange = { vm.updateSettings(vm.settings.copy(voiceRate = (it * 20).toInt() / 20f)) }, valueRange = 0.6f..1.6f)
     val voices = remember(s.lang) { vm.phoneVoice.voices(s.lang) }
     if (voices.isNotEmpty() && !s.offlineSpeak) {

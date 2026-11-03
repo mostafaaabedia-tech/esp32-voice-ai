@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads the offline speech engine (sherpa-onnx) and the built-in voice packs
 # into the app before building. Used by GitHub Actions; you can run it locally too.
-#   - speech recognition: streaming Zipformer 20M (English), int8
+#   - speech recognition: streaming Zipformer 20M (English), int8, mobile build
 #   - voices: KittenTTS nano v0.8 int8 (8 voices) + English espeak-ng data
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,8 +18,8 @@ fi
 
 if [ ! -s "$A/asr/encoder.int8.onnx" ]; then
   echo "speech recognition model"
-  curl -fsSL "$B/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2" | tar xj -C "$TMP"
-  d="$TMP/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+  curl -fsSL "$B/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17-mobile.tar.bz2" | tar xj -C "$TMP"
+  d="$TMP/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17-mobile"
   cp "$d/encoder-epoch-99-avg-1.int8.onnx" "$A/asr/encoder.int8.onnx"
   cp "$d/decoder-epoch-99-avg-1.onnx" "$A/asr/decoder.onnx"
   cp "$d/joiner-epoch-99-avg-1.int8.onnx" "$A/asr/joiner.int8.onnx"

@@ -152,12 +152,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Read a reply out loud on the phone and show it (with a feeling) on the ESP32 screen. */
-    fun speakAnswer(text: String, emotion: String? = null, showOnEsp: Boolean = true) {
+    fun speakAnswer(text: String, emotion: String? = null, showOnEsp: Boolean = true, slow: Boolean = false) {
         val s = settings
         val spoken = plain(text)
         if (showOnEsp && s.espHost.isNotBlank()) viewModelScope.launch { runCatching { Api.espShow(s.espHost, spoken, emotion) } }
         syncSubs = showOnEsp && s.route.onPhone && s.espHost.isNotBlank()
-        if (s.route.onPhone) phoneVoice.speak(spoken, s.lang)
+        if (s.route.onPhone) {
+            if (slow) phoneVoice.rate = s.voiceRate * 0.78f          // learners: a slower repeat
+            phoneVoice.speak(spoken, s.lang)
+            phoneVoice.rate = s.voiceRate
+        }
     }
 
     /** Saves AI settings on the ESP32 too, so both modes behave the same. */

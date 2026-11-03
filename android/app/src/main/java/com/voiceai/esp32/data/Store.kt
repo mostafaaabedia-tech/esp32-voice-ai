@@ -15,6 +15,7 @@ class Store(context: Context) {
     fun loadSettings(): AppSettings {
         val d = AppSettings()
         val fresh = !prefs.contains("character")       // first start of version 7: meet the wizard
+        val old8 = prefs.getInt("ver", 0) < 8           // before version 8 the voice was too fast
         return AppSettings(
             espHost = prefs.getString("espHost", d.espHost) ?: d.espHost,
             pcHost = prefs.getString("pcHost", d.pcHost) ?: d.pcHost,
@@ -40,12 +41,16 @@ class Store(context: Context) {
             eyeColor = if (fresh) d.eyeColor else prefs.getString("cEyes", d.eyeColor) ?: d.eyeColor,
             hatColor = prefs.getString("cHat", d.hatColor) ?: d.hatColor,
             voicePitch = if (fresh) d.voicePitch else prefs.getFloat("vPitch", d.voicePitch),
-            voiceRate = prefs.getFloat("vRate", d.voiceRate),
+            voiceRate = if (old8) d.voiceRate else prefs.getFloat("vRate", d.voiceRate),
             voiceName = prefs.getString("vName", d.voiceName) ?: d.voiceName,
             talkMode = prefs.getBoolean("talkMode", d.talkMode),
             offlineListen = prefs.getBoolean("offListen", d.offlineListen),
             offlineSpeak = prefs.getBoolean("offSpeak", d.offlineSpeak),
             offlineVoice = prefs.getInt("offVoice", d.offlineVoice),
+            listenPatience = prefs.getInt("patience", d.listenPatience),
+            listenCue = prefs.getBoolean("cue", d.listenCue),
+            englishHelp = prefs.getBoolean("engHelp", d.englishHelp),
+            englishLevel = runCatching { EnglishLevel.valueOf(prefs.getString("engLevel", d.englishLevel.name)!!) }.getOrDefault(d.englishLevel),
         )
     }
 
@@ -81,6 +86,11 @@ class Store(context: Context) {
             .putBoolean("offListen", s.offlineListen)
             .putBoolean("offSpeak", s.offlineSpeak)
             .putInt("offVoice", s.offlineVoice)
+            .putInt("patience", s.listenPatience)
+            .putBoolean("cue", s.listenCue)
+            .putBoolean("engHelp", s.englishHelp)
+            .putString("engLevel", s.englishLevel.name)
+            .putInt("ver", 8)
             .apply()
     }
 
@@ -146,6 +156,18 @@ class Store(context: Context) {
         val a = JSONArray()
         list.takeLast(60).forEach { a.put(JSONObject().put("r", it.first).put("t", it.second)) }
         runCatching { talkFile.writeText(a.toString()) }
+    }
+
+    /** English words you looked up, with their meaning. */
+    fun loadWords(): List<Pair<String, String>> = runCatching {
+        val a = JSONArray(prefs.getString("words", "[]"))
+        (0 until a.length()).map { val o = a.getJSONObject(it); o.getString("w") to o.getString("m") }
+    }.getOrDefault(emptyList())
+
+    fun saveWords(list: List<Pair<String, String>>) {
+        val a = JSONArray()
+        list.takeLast(150).forEach { a.put(JSONObject().put("w", it.first).put("m", it.second)) }
+        prefs.edit().putString("words", a.toString()).apply()
     }
 
     var lastGreetMs: Long

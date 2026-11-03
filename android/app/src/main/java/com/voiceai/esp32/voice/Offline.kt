@@ -7,6 +7,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
 import com.k2fsa.sherpa.onnx.EndpointConfig
@@ -47,12 +49,11 @@ object OfflineEngine {
         if (started) return
         started = true
         val app = ctx.applicationContext
-        Thread({
-            ttsStatus = "loading"
-            ttsStatus = try { loadTts(app); "ready" } catch (e: Throwable) { "not available (${e.message})" }
-            asrStatus = "loading"
-            asrStatus = try { loadAsr(app); "ready" } catch (e: Throwable) { "not available (${e.message})" }
-        }, "offline-load").start()
+        asrStatus = "loading"
+        ttsStatus = "loading"
+        // load both at the same time: the mic is ready a few seconds sooner
+        Thread({ asrStatus = try { loadAsr(app); "ready" } catch (e: Throwable) { "not available (${e.message})" } }, "offline-asr-load").start()
+        Thread({ ttsStatus = try { loadTts(app); "ready" } catch (e: Throwable) { "not available (${e.message})" } }, "offline-tts-load").start()
     }
 
     private fun hasAsset(ctx: Context, path: String) = runCatching { ctx.assets.open(path).close(); true }.getOrDefault(false)
@@ -71,12 +72,17 @@ object OfflineEngine {
                 numThreads = 2,
                 modelType = "zipformer",
             ),
+            // the listener decides itself when you finished (Settings -> "Wait for me"),
+            // these rules are only a safety net
             endpointConfig = EndpointConfig(
-                rule1 = EndpointRule(false, 3.0f, 0.0f),     // only silence
-                rule2 = EndpointRule(true, 1.0f, 0.0f),      // you stopped talking
-                rule3 = EndpointRule(false, 0.0f, 20.0f),    // very long sentence
+                rule1 = EndpointRule(false, 12.0f, 0.0f),
+                rule2 = EndpointRule(true, 8.0f, 0.0f),
+                rule3 = EndpointRule(false, 0.0f, 40.0f),
             ),
             enableEndpoint = true,
+            // looks at several guesses instead of only the first one: fewer missed words
+            decodingMethod = "modified_beam_search",
+            maxActivePaths = 4,
         )
         recognizer = OnlineRecognizer(ctx.assets, cfg)
     }
@@ -129,6 +135,9 @@ class OfflineListener {
 
     val active get() = running
 
+    /** How long you can pause (thinking of a word) before your turn ends. */
+    @Volatile var patienceMs = 2200
+
     fun start(
         onPartial: (String) -> Unit,
         onLevel: (Float) -> Unit,
@@ -165,33 +174,58 @@ class OfflineListener {
             main.post { onFail("The microphone is busy") }
             return
         }
+        // the phone's own noise cleaner + volume leveller, when it has them
+        val ns = runCatching { if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(ar.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
+        val agc = runCatching { if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(ar.audioSessionId)?.apply { enabled = true } else null }.getOrNull()
         val stream = rec.createStream()
         val buf = ShortArray(1600)                 // 0.1 s
         var last = ""
         var spoke = false
         var result: String? = null
+        var noise = 0.01f                          // background noise level (learned)
+        var gain = 2f                              // makes quiet / far voices louder
+        val startMs = System.currentTimeMillis()
+        var lastVoiceMs = startMs
         try {
             ar.startRecording()
             while (running) {
                 val n = ar.read(buf, 0, buf.size)
                 if (n <= 0) continue
-                val f = FloatArray(n)
+                val now = System.currentTimeMillis()
                 var sum = 0.0
-                for (i in 0 until n) { val v = buf[i] / 32768f; f[i] = v; sum += (v * v).toDouble() }
-                val level = (sqrt(sum / n).toFloat() * 14f).coerceIn(0f, 1f)
-                main.post { onLevel(level) }
+                for (i in 0 until n) { val v = buf[i] / 32768f; sum += (v * v).toDouble() }
+                val rms = sqrt(sum / n).toFloat()
+                // voice or background? the noise level follows the quiet parts
+                val voice = rms > maxOf(0.008f, noise * 2.8f)
+                noise = if (voice) noise * 0.999f + rms * 0.001f else noise * 0.95f + rms * 0.05f
+                if (voice) {
+                    lastVoiceMs = now
+                    gain = (gain * 0.9f + (0.1f / maxOf(rms, 0.004f)).coerceIn(1f, 8f) * 0.1f)
+                }
+                val f = FloatArray(n)
+                for (i in 0 until n) {
+                    val v = buf[i] / 32768f * gain
+                    f[i] = if (v > 0.95f) 0.95f else if (v < -0.95f) -0.95f else v      // no harsh clipping
+                }
+                main.post { onLevel((rms * gain * 10f).coerceIn(0f, 1f)) }
                 stream.acceptWaveform(f, sr)
                 while (rec.isReady(stream)) rec.decode(stream)
                 val text = pretty(rec.getResult(stream).text)
                 if (text.isNotEmpty() && text != last) {
                     last = text
+                    lastVoiceMs = now
                     if (!spoke) { spoke = true; main.post { onSpeechStart() } }
                     main.post { onPartial(text) }
                 }
                 if (stopReq) { result = last; break }
+                // your turn ends only after a real pause (you can stop to think of a word)
+                val quietFor = now - lastVoiceMs
+                if (last.isNotEmpty() && quietFor > patienceMs) { result = last; main.post { onSpeechEnd() }; break }
+                if (last.isEmpty() && now - startMs > 10_000) { main.post { onFail("Didn't hear anything") }; break }
+                if (now - startMs > 45_000) { result = last; break }
                 if (rec.isEndpoint(stream)) {
                     if (last.isNotEmpty()) { result = last; main.post { onSpeechEnd() }; break }
-                    rec.reset(stream)              // only silence so far: keep listening
+                    rec.reset(stream)
                 }
             }
         } catch (e: Exception) {
@@ -199,6 +233,7 @@ class OfflineListener {
         } finally {
             runCatching { ar.stop() }
             ar.release()
+            runCatching { ns?.release(); agc?.release() }
             stream.release()
         }
         val deliver = running && result != null
@@ -216,6 +251,8 @@ class OfflineListener {
         /** The model writes in CAPITALS: make it a normal sentence. */
         fun pretty(raw: String): String {
             val t = raw.trim().lowercase()
+                .replace(Regex("\\b(zeffer|zefer|zephir|zephyre|zafir|zefir)\\b"), "zephyr")   // the wizard's name
+                .replace(Regex("\\b(uh|um|erm|hmm|ah)\\b"), "").replace(Regex("\\s+"), " ").trim()
             if (t.isEmpty()) return t
             return t.replace(Regex("\\bi\\b"), "I")
                 .replace(Regex("\\bi'(m|ll|ve|d)\\b")) { "I'" + it.groupValues[1] }
@@ -236,7 +273,7 @@ class OfflineSpeaker {
     var onProgress: ((Int, Int) -> Unit)? = null
     var onDone: (() -> Unit)? = null
 
-    private class Chunk(val start: Int, val len: Int, val samples: FloatArray, val rate: Int)
+    private class Chunk(val start: Int, val len: Int, val samples: FloatArray, val rate: Int, val pauseMs: Int)
     private object End
 
     fun speak(text: String, voice: Int, pitch: Float, rate: Float): Boolean {
@@ -274,7 +311,10 @@ class OfflineSpeaker {
             for ((start, s) in parts) {
                 if (gen != my) break
                 val a = try { tts.generate(s.trim(), sid = voice, speed = rate / pitch) } catch (e: Throwable) { null }
-                if (a != null && a.samples.isNotEmpty()) q.put(Chunk(start, s.length, a.samples, a.sampleRate))
+                // a short breath after each sentence (longer when speaking slowly)
+                val end = s.trimEnd().lastOrNull()
+                val pause = ((if (end == '.' || end == '!' || end == '?') 380 else 200) / rate).toInt()
+                if (a != null && a.samples.isNotEmpty()) q.put(Chunk(start, s.length, a.samples, a.sampleRate, pause))
             }
             q.put(End)
         }, "offline-tts-gen").start()
@@ -320,6 +360,11 @@ class OfflineSpeaker {
                     lastPos = pos
                     onProgress?.invoke(pos, text.length)
                 }
+            }
+            if (gen == my && c.pauseMs > 0) {
+                val silence = FloatArray(c.rate * c.pauseMs / 1000)
+                val w = tr.write(silence, 0, silence.size, AudioTrack.WRITE_BLOCKING)
+                if (w > 0) written += w
             }
         }
         val last = t

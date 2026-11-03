@@ -59,6 +59,25 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
     var avatarReady by mutableStateOf(false)
     private var timerJob: Job? = null
 
+    // English helper
+    /** Correction of your last sentence ("Better English: ..."). */
+    var fix by mutableStateOf<String?>(null); private set
+    /** Dari translation of the bubble (asked with the 🌐 button). */
+    var translation by mutableStateOf<String?>(null); private set
+    var translating by mutableStateOf(false); private set
+    /** Word you asked about: word to meaning (null meaning = still looking it up). */
+    var wordHelp by mutableStateOf<Pair<String, String?>?>(null)
+    /** Today's word card. */
+    var wordCard by mutableStateOf<English.Word?>(null)
+    /** "Repeat after me": the sentence to say, and how well you said it. */
+    var practice by mutableStateOf<String?>(null); private set
+    var practiceScore by mutableStateOf<English.Score?>(null); private set
+    /** Words you looked up (word to meaning). */
+    val words = mutableStateListOf<Pair<String, String>>().apply { addAll(store.loadWords()) }
+    /** True while you type a message: she doesn't start talking then. */
+    var userTyping = false
+    private var wordOffset = 0
+
     /** JavaScript commands for the avatar (collected by the screen's WebView). */
     val js = MutableSharedFlow<String>(extraBufferCapacity = 64)
 
@@ -152,11 +171,17 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         }
     }
 
+    /** Stop the voice now (and the talking animation). */
+    private fun hush() {
+        vm.phoneVoice.stop()
+        if (speaking) { speaking = false; pushState() }
+    }
+
     fun micChanged(on: Boolean) {
         if (listening == on) return
         listening = on
         if (on) {
-            vm.phoneVoice.stop()
+            hush()
             talkJob?.takeIf { it.isActive && !thinking }?.cancel()
             status = "listening…"
         } else if (status == "listening…") status = ""
@@ -169,7 +194,18 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         if (t.isEmpty()) return
         lastInteraction = now()
         talkJob?.cancel()
-        vm.phoneVoice.stop()
+        hush()
+        translation = null
+        fix = null
+        // practising "repeat after me": score how you said it (works offline)
+        practice?.let { target ->
+            val sc = English.score(target, t)
+            practiceScore = sc
+            logTalk("user" to t, "${sc.percent}% - $target", "happy")
+            say(if (sc.percent >= 70) "excited" else "happy", English.feedback(sc, wizard), reply = false)
+            if (sc.percent >= 90) castSpell(if (wizard) "starburst" else "fireworks", speak = false)
+            return
+        }
         val local = Magic.local(t, wizard, sensors?.love, vm.pcOnline)
         if (local != null) {
             logTalk("user" to t, local.text, local.emotion)
@@ -187,6 +223,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             "joke" -> "tell me a joke"
             "dice" -> "roll a dice"
             "coin" -> "flip a coin"
+            "word" -> { wordOfTheDay(); return }
+            "practice" -> { startPractice(); return }
             else -> return
         }
         Magic.local(ask, wizard, sensors?.love, false)?.let { doLocal(it, reply = false) }
@@ -207,10 +245,108 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         val host = vm.settings.espHost
         if (host.isNotBlank()) scope.launch { Api.espSpell(host, sp.id, sp.seconds * 1000) }
         if (speak) {
-            vm.phoneVoice.stop()
+            hush()
             say(if (sp.id == "dream") "sleepy" else "excited", "${sp.words} ${sp.line}", reply = false, onEsp = false)
         }
     }
+
+    // ------------------------------------------------------- English helper --
+    /** Say the last answer again, slowly. */
+    fun repeatSlow() {
+        val t = bubble.ifBlank { return }
+        hush()
+        say(emotion, t, reply = false, slow = true)
+    }
+
+    fun translationClose() { translation = null }
+
+    /** Dari translation of the bubble (needs the PC). */
+    fun translate() {
+        val text = bubble.ifBlank { return }
+        if (translating) return
+        if (!vm.pcOnline) { translation = "برای ترجمه، کامپیوتر (Ollama) باید روشن باشد."; return }
+        translating = true
+        scope.launch {
+            translation = ask(
+                "Translate this English text into Dari (the Persian spoken in Afghanistan). Write only the Dari translation in Persian script, nothing else.\n\n$text",
+                120,
+            )?.trim()?.trim('"') ?: "ترجمه ممکن نشد."
+            translating = false
+        }
+    }
+
+    /** Explain one English word simply, with its Dari meaning. */
+    fun explainWord(word: String) {
+        val w = word.lowercase().trim(',', '.', '?', '!', '"', '\'', ':', ';')
+        if (w.isBlank()) return
+        English.WORDS.firstOrNull { it.word == w }?.let {
+            showWord(w, "${it.meaning} | ${it.dari}")
+            return
+        }
+        words.firstOrNull { it.first == w }?.let { showWord(w, it.second); return }
+        if (!vm.pcOnline) { wordHelp = w to "Turn on the PC (Ollama) to look up new words."; return }
+        wordHelp = w to null
+        scope.launch {
+            val a = ask(
+                "Explain the English word \"$w\" for an English learner. Write one short, simple English explanation (max 12 words), " +
+                    "then the character | and then its meaning in Dari (Persian script, 1 to 3 words). Example: thankful, happy about help | سپاسگزار",
+                60,
+            )?.trim()
+            if (a == null) { wordHelp = w to "Couldn't reach the AI."; return@launch }
+            showWord(w, a.lines().first { it.isNotBlank() })
+        }
+    }
+
+    private fun showWord(w: String, meaning: String) {
+        wordHelp = w to meaning
+        if (words.none { it.first == w }) {
+            words.add(w to meaning)
+            store.saveWords(words.toList())
+        }
+        hush()
+        val english = meaning.substringBefore('|').trim()
+        vm.speakAnswer("$w. $english", "thinking", showOnEsp = false, slow = true)
+    }
+
+    fun forgetWord(w: String) {
+        words.removeAll { it.first == w }
+        store.saveWords(words.toList())
+    }
+
+    /** Word of the day (offline list with Dari meanings). */
+    fun wordOfTheDay() {
+        val day = LocalDateTime.now().dayOfYear
+        val w = English.wordOfTheDay(day + wordOffset++)
+        wordCard = w
+        if (words.none { it.first == w.word }) { words.add(w.word to "${w.meaning} | ${w.dari}"); store.saveWords(words.toList()) }
+        say("excited", "Word of the day: ${w.word}. It means ${w.meaning}. For example: ${w.example}", reply = false, slow = true)
+    }
+
+    /** "Repeat after me" practice. */
+    fun startPractice() {
+        practiceScore = null
+        practice = English.practiceSentence(vm.settings.englishLevel, practice)
+        sayPractice()
+    }
+
+    fun sayPractice() {
+        val p = practice ?: return
+        practiceScore = null
+        hush()
+        say("happy", "Repeat after me: $p", reply = false, slow = true)
+        listenAfter = true                       // always listen for your try
+    }
+
+    fun stopPractice() {
+        practice = null
+        practiceScore = null
+    }
+
+    /** One quick question to the AI (translation, word meaning). */
+    private suspend fun ask(prompt: String, tokens: Int): String? = try {
+        val msgs = JSONArray().put(JSONObject().put("role", "user").put("content", prompt))
+        Api.ollamaChat(vm.settings.pcHost, vm.settings.model, msgs, tokens, 0.2f) { }.first
+    } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
 
     // --------------------------------------------------------------- timers --
     fun startTimer(sec: Int) {
@@ -222,6 +358,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             delay(sec * 1000L)
             timerEnd = 0
             castSpell("fireworks", speak = false)
+            var waited = 0
+            while ((speaking || listening || thinking) && waited < 20_000) { delay(300); waited += 300 }   // don't interrupt
             say("excited", if (wizard) "Ding ding! The sand has run out. Time's up!" else "Time's up!", reply = false)
         }
     }
@@ -244,7 +382,10 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         pushState()
         if (listenAfter && active) {
             listenAfter = false
-            vm.requestListen()
+            scope.launch {
+                delay(700)                                // a short breath before the mic opens again
+                if (!speaking && active) vm.requestListen()
+            }
         }
     }
 
@@ -297,6 +438,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             "arrive" -> {
                 val away = if (lastLeaveAt > 0) (now() - lastLeaveAt) / 60_000 else 0
                 val missed = if (away >= 30) " after being away for $away minutes (you missed them)" else ""
+                if (now() - lastInteraction < 60_000) { showEmotion("happy", 2, onEsp = false); return }
                 lastInteraction = now()
                 react("arrive", "(event: with your ultrasonic sensor you just saw ${who()} walk up to you$missed. Greet them naturally in one or two short sentences.)", cool = 90_000)
             }
@@ -372,8 +514,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
     private fun react(key: String, event: String, cool: Long = 10_000, force: Boolean = false) {
         val t = now()
         if (!force && t - (cooldown[key] ?: 0) < cool) return
-        if (listening || vm.busy) return
-        if (!force && (talkJob?.isActive == true || speaking)) return
+        if (listening || vm.busy || (userTyping && !force)) return
+        if (!force && (talkJob?.isActive == true || speaking || practice != null)) return
         cooldown[key] = t
         talkJob?.cancel()
         talkJob = scope.launch { respond(event = event, key = key) }
@@ -382,6 +524,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
     private suspend fun respond(user: String? = null, event: String? = null, key: String = "user") {
         val s = vm.settings
         val prompt = user ?: event ?: return
+        if (user == null && practice != null) return             // practising: she stays focused
         if (s.pcHost.isBlank() || (!vm.pcOnline && user == null)) {
             if (user != null) Magic.offlineAnswer(wizard).let { say(it.emotion, it.text, reply = false) }
             else canned(key)?.let { (e, line) -> say(e, line, reply = false) }
@@ -402,7 +545,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
 
         var raw = ""
         val result = try {
-            Api.ollamaChat(s.pcHost, s.model, msgs, if (user != null) s.maxTokens else 90, 0.85f) { piece ->
+            Api.ollamaChat(s.pcHost, s.model, msgs, if (user != null) s.maxTokens else 90, 0.75f) { piece ->
                 raw += piece
                 val live = visible(raw)
                 if (live.isNotEmpty() && !live.equals("quiet", true)) withContext(Dispatchers.Main) { bubble = live }
@@ -429,6 +572,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             return
         }
         p.remember?.let { remember(it) }
+        if (user != null && s.englishHelp) fix = p.fix?.takeIf { !it.equals(user.trim(), true) }
         talk.add("user" to prompt)
         talk.add("assistant" to "[${p.emotion}] ${p.text}")
         while (talk.size > 60) talk.removeAt(0)
@@ -448,17 +592,18 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         scope.launch(Dispatchers.IO) { store.saveTalk(copy) }
     }
 
-    private fun say(emotion: String, text: String, reply: Boolean, onEsp: Boolean = true) {
+    private fun say(emotion: String, text: String, reply: Boolean, onEsp: Boolean = true, slow: Boolean = false) {
+        if (bubble != text) translation = null
         bubble = text
         lastInteraction = now()
         showEmotion(emotion, (text.length / 14).coerceIn(3, 20) + 2, onEsp = false)   // the OLED gets it with the words
         listenAfter = reply && vm.settings.talkMode
-        if (onEsp) vm.speakAnswer(text, emotion) else vm.speakAnswer(text, emotion, showOnEsp = false)
+        vm.speakAnswer(text, emotion, showOnEsp = onEsp, slow = slow)
         if (!vm.settings.route.onPhone) {                                             // silent: still move her lips
             speaking = true
             pushState()
             scope.launch {
-                val end = now() + text.length * 60L
+                val end = now() + text.length * (if (slow) 85L else 65L)
                 while (now() < end && speaking) { js.tryEmit("Avatar.word()"); delay(260) }
                 speechFinished()
             }
@@ -516,7 +661,13 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             append("Your personality: ${s.personality.prompt}. ")
             append("You have your own feelings, opinions and curiosity, and you really care about $w. Talk like a close friend, not like a formal assistant, but you still gladly help with questions, homework and facts. ")
             append("You can feel head pats through an IR sensor and see people come and go with an ultrasonic sensor. ")
-            append("Answer with short spoken sentences: 1 to 3 sentences, under ${s.maxWords} words. No lists, no markdown, no emojis. Sometimes ask a question back. ")
+            val maxW = if (s.englishHelp) minOf(s.maxWords, s.englishLevel.words) else s.maxWords
+            append("Answer with short spoken sentences: 1 to 3 sentences, under $maxW words. No lists, no markdown, no emojis. Sometimes ask a question back. ")
+            if (s.englishHelp) {
+                append("$w is learning English; their first language is Dari. Talk to $w as to ${s.englishLevel.prompt}. If you use a harder word, explain it in a few easy words. ")
+                append("If $w's last message has a clear English grammar mistake, add at the very end <fix>the corrected sentence</fix>. Do not correct names, spelling of names or tiny typos. ")
+                append("Always reply in simple English, even if $w writes in Dari; then they can practise. ")
+            }
             append("Always start your reply with ONE feeling tag: [happy] [love] [shy] [excited] [surprised] [sad] [angry] [sleepy] [thinking] [laugh] [wink] [neutral]. ")
             append("If $w tells you something worth remembering about themselves (their name, likes, plans, birthday, friends), add at the very end: <remember>short fact</remember>. ")
             if (s.userName.isBlank()) append("You don't know their name yet; at a good moment you can ask for it. ")
@@ -529,14 +680,16 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             }
             se?.let { append("Your love for $w: ${it.love}%. ") }
             if (quietMin >= 20) append("You have felt a bit lonely: nobody talked to you for $quietMin minutes. ")
-            if (s.lang.startsWith("fa")) append("Answer in Dari (Persian). ")
-            else append("Answer in the language $w uses. ")
+            if (!s.englishHelp) {
+                if (s.lang.startsWith("fa")) append("Answer in Dari (Persian). ")
+                else append("Answer in the language $w uses. ")
+            }
             if (s.persona.prompt.isNotBlank()) append(s.persona.prompt)
         }
     }
 
     // ---------------------------------------------------------------- parse --
-    data class Parsed(val emotion: String, val text: String, val remember: String?, val quiet: Boolean, val spell: String? = null)
+    data class Parsed(val emotion: String, val text: String, val remember: String?, val quiet: Boolean, val spell: String? = null, val fix: String? = null)
 
     companion object {
         val EMOTIONS = setOf("happy", "love", "shy", "excited", "surprised", "sad", "angry", "sleepy", "thinking", "laugh", "wink", "neutral")
@@ -545,6 +698,7 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
         fun visible(raw: String): String = raw
             .replace(Regex("(?is)<remember>.*?(</remember>|$)"), "")
             .replace(Regex("(?is)<spell>.*?(</spell>|$)"), "")
+            .replace(Regex("(?is)<fix>.*?(</fix>|$)"), "")
             .replace(Regex("\\[[^\\]]{0,24}]"), "")
             .replace(Regex("\\[[^\\]]*$"), "")
             .replace(Regex("<[^>]*$"), "")
@@ -565,7 +719,8 @@ class Companion(private val vm: MainViewModel, private val store: Store) {
             }
             val rem = Regex("(?is)<remember>(.*?)</remember>").find(t)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
             val spell = Regex("(?is)<spell>\\s*([a-z]+)").find(t)?.groupValues?.get(1)?.lowercase()?.takeIf { Magic.spell(it) != null }
-            return Parsed(emo, text, rem, quiet, spell)
+            val fix = Regex("(?is)<fix>(.*?)</fix>").find(t)?.groupValues?.get(1)?.trim()?.takeIf { it.length in 3..200 }
+            return Parsed(emo, text, rem, quiet, spell, fix)
         }
     }
 
